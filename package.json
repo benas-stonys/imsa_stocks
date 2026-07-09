@@ -1,0 +1,13 @@
+{
+  "name": "classroom-trading-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.35.0"
+  },
+  "scripts": {
+    "start": "netlify dev",
+    "build": "echo 'No build step required'",
+    "deploy": "netlify deploy --dir=. --functions=netlify/functions"
+  }
+}
