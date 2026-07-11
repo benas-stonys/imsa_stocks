@@ -1,8 +1,9 @@
 
+## Overview
 
-lightweight classroom stock trading simulator built for Supabase + Netlify.
+Lightweight classroom stock trading simulator built for Supabase + Netlify.
 
-What this includes
+## What this includes
 
 Student and admin login with Supabase Auth
 Supabase-backed data model for students, portfolios, transactions, and stocks
