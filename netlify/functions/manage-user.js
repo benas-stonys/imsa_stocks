@@ -78,7 +78,7 @@ async function createAdmin({ email, password, username }) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing admin user fields' }) };
   }
 
-  const { data: user, error } = await supabase.auth.admin.createUser({
+  const { data, error } = await supabase.auth.admin.createUser({
     email,
     password,
     user_metadata: { username, role: 'admin' },
@@ -88,7 +88,9 @@ async function createAdmin({ email, password, username }) {
     return { statusCode: 400, body: JSON.stringify({ error: error.message }) };
   }
 
-  const { error: profileError } = await supabase.from('profiles').insert([{ id: user.id, username, role: 'admin', starting_cash: 10000 }]);
+  const newUser = data.user;
+
+  const { error: profileError } = await supabase.from('profiles').insert([{ id: newUser.id, username, role: 'admin', starting_cash: 10000 }]);
   if (profileError) {
     return { statusCode: 500, body: JSON.stringify({ error: profileError.message }) };
   }
@@ -101,7 +103,7 @@ async function createStudent({ email, password, username, starting_cash }) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing student fields' }) };
   }
 
-  const { data: user, error } = await supabase.auth.admin.createUser({
+  const { data, error } = await supabase.auth.admin.createUser({
     email,
     password,
     user_metadata: { username, role: 'student' },
@@ -111,13 +113,15 @@ async function createStudent({ email, password, username, starting_cash }) {
     return { statusCode: 400, body: JSON.stringify({ error: error.message }) };
   }
 
+  const newUser = data.user;
   const cash = Number(starting_cash) || 10000;
-  const { error: profileError } = await supabase.from('profiles').insert([{ id: user.id, username, role: 'student', starting_cash: cash }]);
+
+  const { error: profileError } = await supabase.from('profiles').insert([{ id: newUser.id, username, role: 'student', starting_cash: cash }]);
   if (profileError) {
     return { statusCode: 500, body: JSON.stringify({ error: profileError.message }) };
   }
 
-  const { error: portfolioError } = await supabase.from('portfolios').insert([{ student_id: user.id, cash, holdings: {} }]);
+  const { error: portfolioError } = await supabase.from('portfolios').insert([{ student_id: newUser.id, cash, holdings: {} }]);
   if (portfolioError) {
     return { statusCode: 500, body: JSON.stringify({ error: portfolioError.message }) };
   }
