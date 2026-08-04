@@ -477,3 +477,50 @@ async function callManageUserApi(payload) {
 function formatCurrency(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
 }
+
+async function loadPriceChart(ticker) {
+  const { data, error } = await supabase
+    .from('price_history')
+    .select('price, recorded_at')
+    .eq('ticker', ticker)
+    .order('recorded_at', { ascending: true });
+
+  if (error) { console.error(error); return; }
+  if (!data || data.length === 0) return;
+
+  const labels = data.map(d => new Date(d.recorded_at).toLocaleString());
+  const prices = data.map(d => d.price);
+  const trendingUp = prices[prices.length - 1] >= prices[0];
+
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: ticker,
+        data: prices,
+        borderColor: trendingUp ? '#2FBF71' : '#E5484D',
+        backgroundColor: trendingUp ? 'rgba(47,191,113,0.08)' : 'rgba(229,72,77,0.08)',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.25,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: { color: '#7C879E', maxTicksLimit: 6 },
+          grid: { color: '#26314E' }
+        },
+        y: {
+          ticks: { color: '#7C879E' },
+          grid: { color: '#26314E' }
+        }
+      }
+    }
+  });
+}
