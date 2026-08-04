@@ -79,10 +79,11 @@ async function createAdmin({ email, password, username }) {
   }
 
   const { data, error } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    user_metadata: { username, role: 'admin' },
-  });
+  email,
+  password,
+  email_confirm: true,
+  user_metadata: { username, role: 'admin' },
+});
 
   if (error) {
     return { statusCode: 400, body: JSON.stringify({ error: error.message }) };
@@ -106,6 +107,7 @@ async function createStudent({ email, password, username, starting_cash }) {
   const { data, error } = await supabase.auth.admin.createUser({
     email,
     password,
+    email_confirm: true,
     user_metadata: { username, role: 'student' },
   });
 
