@@ -6,3 +6,7 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+[functions."refresh-stock-prices"]
+  schedule = "@hourly"
+  
