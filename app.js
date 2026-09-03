@@ -149,6 +149,40 @@ async function renderDashboard(profile, user) {
   }
 }
 
+function renderStudentTabs() {
+  const body = document.getElementById('dashboard-body');
+  const { profile, stocks, leaderboard, portfolio } = dashboardState;
+
+  body.innerHTML = `
+    <div class="tabs">
+      <button class="tab-btn ${activeStudentTab === 'trade' ? 'active' : ''}" data-tab="trade">Trade</button>
+      <button class="tab-btn ${activeStudentTab === 'positions' ? 'active' : ''}" data-tab="positions">Positions</button>
+      <button class="tab-btn ${activeStudentTab === 'resources' ? 'active' : ''}" data-tab="resources">Resources</button>
+    </div>
+    <div id="tab-content"></div>
+  `;
+
+  body.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeStudentTab = btn.dataset.tab;
+      renderStudentTabs();
+    });
+  });
+
+  const content = document.getElementById('tab-content');
+  if (activeStudentTab === 'trade') {
+    content.innerHTML = renderTradeTab(stocks);
+    document.getElementById('trade-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      await handleTrade(profile.id, stocks);
+    });
+  } else if (activeStudentTab === 'positions') {
+    content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
+    attachTickerClicks();
+  } else {
+    content.innerHTML = renderResourcesTab();
+  }
+}
 
 function renderTradeTab(stocks) {
   return `
