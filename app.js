@@ -4,6 +4,15 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
 
+let dashboardState = { profile: null, stocks: [], leaderboard: [], portfolio: null };
+let activeStudentTab = 'trade';
+
+const resourceLinks = [
+  { name: 'Yahoo Finance', url: 'https://finance.yahoo.com' },
+  { name: 'MarketWatch', url: 'https://www.marketwatch.com' },
+  // add your own favorites here
+];
+
 window.addEventListener('DOMContentLoaded', start);
 
 async function start() {
@@ -161,40 +170,163 @@ async function renderDashboard(profile, user) {
   }
 }
 
-function renderStudentPanel(profile, portfolio, stocks, leaderboard) {
+async function renderDashboard(profile, user) {
+  const stocks = await loadStocks();
+  const leaderboard = await loadLeaderboard(stocks);
+  const studentPortfolio = profile.role === 'student' ? await loadStudentPortfolio(profile.id) : null;
+
+  dashboardState = { profile, stocks, leaderboard, portfolio: studentPortfolio };
+
+  app.innerHTML = `
+    <div class="card">
+      <div class="grid grid-2">
+        <div>
+          <h1>Welcome, ${profile.username}</h1>
+          <p class="small-text">Role: ${profile.role}</p>
+        </div>
+        <div style="text-align:right; align-self:center;">
+          <button id="logout-button" class="secondary">Log out</button>
+        </div>
+      </div>
+    </div>
+    <div id="dashboard-body"></div>
+  `;
+
+  document.getElementById('logout-button').addEventListener('click', async () => {
+    await supabase.auth.signOut();
+    renderAuth();
+  });
+
+  if (profile.role === 'admin') {
+    document.getElementById('dashboard-body').innerHTML = renderAdminPanel(profile, stocks, leaderboard);
+    attachAdminListeners();
+  } else {
+    renderStudentTabs();
+  }
+}
+
+function renderStudentTabs() {
+  const body = document.getElementById('dashboard-body');
+  const { profile, stocks, leaderboard, portfolio } = dashboardState;
+
+  body.innerHTML = `
+    <div class="tabs">
+      <button class="tab-btn ${activeStudentTab === 'trade' ? 'active' : ''}" data-tab="trade">Trade</button>
+      <button class="tab-btn ${activeStudentTab === 'positions' ? 'active' : ''}" data-tab="positions">Positions</button>
+      <button class="tab-btn ${activeStudentTab === 'resources' ? 'active' : ''}" data-tab="resources">Resources</button>
+    </div>
+    <div id="tab-content"></div>
+  `;
+
+  body.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeStudentTab = btn.dataset.tab;
+      renderStudentTabs();
+    });
+  });
+
+  const content = document.getElementById('tab-content');
+  if (activeStudentTab === 'trade') {
+    content.innerHTML = renderTradeTab(stocks);
+    document.getElementById('trade-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      await handleTrade(profile.id, stocks);
+    });
+  } else if (activeStudentTab === 'positions') {
+    content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
+    attachTickerClicks();
+  } else {
+    content.innerHTML = renderResourcesTab();
+  }
+}
+
+function renderTradeTab(stocks) {
+  return `
+    <div class="card">
+      <h2>Trade</h2>
+      <form id="trade-form">
+        <label>Action</label>
+        <select id="trade-action" required>
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <label>Ticker</label>
+        <select id="trade-ticker" required>
+          ${stocks.map(stock => `<option value="${stock.ticker}">${stock.ticker} — ${stock.name}</option>`).join('')}
+        </select>
+        <label>Shares</label>
+        <input id="trade-shares" type="number" min="1" step="1" value="1" required />
+        <button type="submit">Submit trade</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Market</h3>
+      <table class="table">
+        <thead><tr><th>Symbol</th><th>Name</th><th>Price</th></tr></thead>
+        <tbody>
+          ${stocks.map(s => `<tr><td class="clickable-ticker" data-ticker="${s.ticker}">${s.ticker}</td><td>${s.name}</td><td>${formatCurrency(s.current_price)}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderPositionsTab(profile, portfolio, stocks, leaderboard) {
   const totalValue = calculatePortfolioValue(portfolio, stocks);
   return `
-    <div class="grid grid-2">
-      <div class="card">
-        <h2>Your portfolio</h2>
-        <p>Cash: <strong>${formatCurrency(portfolio.cash)}</strong></p>
-        <p>Total value: <strong>${formatCurrency(totalValue)}</strong></p>
-        <p class="small-text">Starting cash: ${formatCurrency(profile.starting_cash)}</p>
-        ${renderHoldingsTable(portfolio.holdings, stocks)}
-      </div>
-      <div class="card">
-        <h2>Trade</h2>
-        <form id="trade-form">
-          <label>Action</label>
-          <select id="trade-action" required>
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-          <label>Ticker</label>
-          <select id="trade-ticker" required>
-            ${stocks.map(stock => `<option value="${stock.ticker}">${stock.ticker} — ${stock.name}</option>`).join('')}
-          </select>
-          <label>Shares</label>
-          <input id="trade-shares" type="number" min="1" step="1" value="1" required />
-          <button type="submit">Submit trade</button>
-        </form>
-      </div>
+    <div class="card">
+      <h2>Your portfolio</h2>
+      ${portfolio.missing ? '<div class="message error">No portfolio found for your account. Contact your admin.</div>' : ''}
+      <p>Cash: <strong>${formatCurrency(portfolio.cash)}</strong></p>
+      <p>Total value: <strong>${formatCurrency(totalValue)}</strong></p>
+      <p class="small-text">Starting cash: ${formatCurrency(profile.starting_cash)}</p>
+      ${renderHoldingsTable(portfolio.holdings, stocks)}
     </div>
     <div class="card">
       <h2>Leaderboard</h2>
       ${renderLeaderboard(leaderboard)}
     </div>
   `;
+}
+
+function renderResourcesTab() {
+  return `
+    <div class="card">
+      <h2>Stock resources</h2>
+      <ul>
+        ${resourceLinks.map(link => `<li><a href="${link.url}" target="_blank" rel="noopener">${link.name}</a></li>`).join('')}
+      </ul>
+    </div>
+  `;
+}
+
+function attachTickerClicks() {
+  document.querySelectorAll('.clickable-ticker').forEach(el => {
+    el.addEventListener('click', () => openStockModal(el.dataset.ticker));
+  });
+}
+
+function attachAdminListeners() {
+  document.getElementById('student-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    await handleCreateStudent();
+  });
+  document.getElementById('ticker-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    await handleAddTicker();
+  });
+  document.getElementById('price-override-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    await handleOverridePrice();
+  });
+  document.getElementById('refresh-prices').addEventListener('click', async () => {
+    await handleRefreshPrices();
+  });
+  document.querySelectorAll('.reset-portfolio').forEach(button => {
+    button.addEventListener('click', async event => {
+      await handleResetPortfolio(event.target.dataset.studentId);
+    });
+  });
 }
 
 function renderAdminPanel(profile, stocks, leaderboard) {
@@ -478,7 +610,9 @@ function formatCurrency(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
 }
 
-async function loadPriceChart(ticker) {
+let modalChartInstance = null;
+
+async function loadPriceChart(ticker, canvasId = 'priceChart') {
   const { data, error } = await supabase
     .from('price_history')
     .select('price, recorded_at')
@@ -486,22 +620,31 @@ async function loadPriceChart(ticker) {
     .order('recorded_at', { ascending: true });
 
   if (error) { console.error(error); return; }
-  if (!data || data.length === 0) return;
+
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  if (!data || data.length === 0) {
+    canvas.parentElement.insertAdjacentHTML('beforeend', '<p class="small-text">No price history yet for this stock.</p>');
+    return;
+  }
 
   const labels = data.map(d => new Date(d.recorded_at).toLocaleString());
   const prices = data.map(d => d.price);
   const trendingUp = prices[prices.length - 1] >= prices[0];
 
-  const ctx = document.getElementById('priceChart').getContext('2d');
-  new Chart(ctx, {
+  if (modalChartInstance) modalChartInstance.destroy();
+
+  const ctx = canvas.getContext('2d');
+  modalChartInstance = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
       datasets: [{
         label: ticker,
         data: prices,
-        borderColor: trendingUp ? '#2FBF71' : '#E5484D',
-        backgroundColor: trendingUp ? 'rgba(47,191,113,0.08)' : 'rgba(229,72,77,0.08)',
+        borderColor: trendingUp ? '#16a34a' : '#dc2626',
+        backgroundColor: trendingUp ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)',
         borderWidth: 2,
         pointRadius: 0,
         tension: 0.25,
@@ -512,15 +655,19 @@ async function loadPriceChart(ticker) {
       responsive: true,
       plugins: { legend: { display: false } },
       scales: {
-        x: {
-          ticks: { color: '#7C879E', maxTicksLimit: 6 },
-          grid: { color: '#26314E' }
-        },
-        y: {
-          ticks: { color: '#7C879E' },
-          grid: { color: '#26314E' }
-        }
+        x: { ticks: { maxTicksLimit: 6 } },
+        y: {}
       }
     }
   });
 }
+
+window.openStockModal = function (ticker) {
+  document.getElementById('modal-ticker').textContent = ticker;
+  document.getElementById('stock-modal').classList.remove('hidden');
+  loadPriceChart(ticker, 'modalChart');
+};
+
+window.closeStockModal = function () {
+  document.getElementById('stock-modal').classList.add('hidden');
+};

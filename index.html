@@ -6,10 +6,16 @@
   <title>Classroom Trading Simulator</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <canvas id="priceChart" height="180"></canvas>
 </head>
 <body>
   <div id="app" class="app-shell"></div>
+  <div id="stock-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <button class="modal-close" onclick="closeStockModal()">&times;</button>
+      <h2 id="modal-ticker"></h2>
+      <canvas id="modalChart" height="220"></canvas>
+    </div>
+  </div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

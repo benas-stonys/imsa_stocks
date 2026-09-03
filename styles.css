@@ -12,6 +12,15 @@
 * {
   box-sizing: border-box;
 }
+.tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:20px; }
+.tab-btn { padding:10px 16px; font-size:14px; color:var(--muted); cursor:pointer; border:none; background:none; border-bottom:2px solid transparent; }
+.tab-btn.active { color:var(--text); border-bottom-color:var(--primary); font-weight:600; }
+.clickable-ticker { cursor:pointer; color:var(--primary); text-decoration:underline; }
+
+.modal-overlay { position:fixed; inset:0; background:rgba(15,23,42,0.6); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal-overlay.hidden { display:none; }
+.modal-card { background:var(--surface); border-radius:18px; padding:28px; width:90%; max-width:520px; position:relative; box-shadow:0 18px 50px rgba(15,23,42,0.2); }
+.modal-close { position:absolute; top:14px; right:18px; background:none; border:none; color:var(--muted); font-size:22px; cursor:pointer; }
 
 body {
   margin: 0;
@@ -138,3 +147,4 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
