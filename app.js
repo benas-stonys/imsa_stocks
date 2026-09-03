@@ -119,62 +119,6 @@ async function renderDashboard(profile, user) {
   const leaderboard = await loadLeaderboard(stocks);
   const studentPortfolio = profile.role === 'student' ? await loadStudentPortfolio(profile.id) : null;
 
-  app.innerHTML = `
-    <div class="card">
-      <div class="grid grid-2">
-        <div>
-          <h1>Welcome, ${profile.username}</h1>
-          <p class="small-text">Role: ${profile.role}</p>
-        </div>
-        <div style="text-align:right; align-self:center;">
-          <button id="logout-button" class="secondary">Log out</button>
-        </div>
-      </div>
-    </div>
-    ${profile.role === 'admin' ? renderAdminPanel(profile, stocks, leaderboard) : renderStudentPanel(profile, studentPortfolio, stocks, leaderboard)}
-  `;
-
-  document.getElementById('logout-button').addEventListener('click', async () => {
-    await supabase.auth.signOut();
-    renderAuth();
-  });
-
-  if (profile.role === 'student') {
-    document.getElementById('trade-form').addEventListener('submit', async event => {
-      event.preventDefault();
-      await handleTrade(profile.id, stocks);
-    });
-  }
-
-  if (profile.role === 'admin') {
-    document.getElementById('student-form').addEventListener('submit', async event => {
-      event.preventDefault();
-      await handleCreateStudent();
-    });
-    document.getElementById('ticker-form').addEventListener('submit', async event => {
-      event.preventDefault();
-      await handleAddTicker();
-    });
-    document.getElementById('price-override-form').addEventListener('submit', async event => {
-      event.preventDefault();
-      await handleOverridePrice();
-    });
-    document.getElementById('refresh-prices').addEventListener('click', async () => {
-      await handleRefreshPrices();
-    });
-    document.querySelectorAll('.reset-portfolio').forEach(button => {
-      button.addEventListener('click', async event => {
-        await handleResetPortfolio(event.target.dataset.studentId);
-      });
-    });
-  }
-}
-
-async function renderDashboard(profile, user) {
-  const stocks = await loadStocks();
-  const leaderboard = await loadLeaderboard(stocks);
-  const studentPortfolio = profile.role === 'student' ? await loadStudentPortfolio(profile.id) : null;
-
   dashboardState = { profile, stocks, leaderboard, portfolio: studentPortfolio };
 
   app.innerHTML = `
