@@ -6,6 +6,9 @@ const app = document.getElementById('app');
 
 let dashboardState = { profile: null, stocks: [], leaderboard: [], portfolio: null };
 let activeStudentTab = 'trade';
+let tradeBusy = false;
+let tradeNotice = null;
+let pendingOrder = null;
 
 const resourceLinks = [
   { name: 'Yahoo Finance', url: 'https://finance.yahoo.com' },
@@ -119,13 +122,18 @@ async function renderDashboard(profile, user) {
   const leaderboard = await loadLeaderboard(stocks);
   const studentPortfolio = profile.role === 'student' ? await loadStudentPortfolio(profile.id) : null;
 
-  dashboardState = { profile, stocks, leaderboard, portfolio: studentPortfolio };
+  const history = profile.role === 'student' ? await loadTradeHistory(profile.id) : { rows: [] };
+  dashboardState = { profile, stocks, leaderboard, portfolio: studentPortfolio, history };
+  if (profile.role === 'student') {
+    try { pendingOrder = JSON.parse(sessionStorage.getItem(`trade-ticket:${profile.id}`) || 'null'); }
+    catch { pendingOrder = null; }
+  }
 
   app.innerHTML = `
     <div class="card">
       <div class="grid grid-2">
         <div>
-          <h1>Welcome, ${profile.username}</h1>
+          <h1>Welcome, ${escapeHtml(profile.username)}</h1>
           <p class="small-text">Role: ${profile.role}</p>
         </div>
         <div style="text-align:right; align-self:center;">
@@ -137,6 +145,9 @@ async function renderDashboard(profile, user) {
   `;
 
   document.getElementById('logout-button').addEventListener('click', async () => {
+    if (tradeBusy) return;
+    pendingOrder = null;
+    tradeNotice = null;
     await supabase.auth.signOut();
     renderAuth();
   });
@@ -154,16 +165,15 @@ function renderStudentTabs() {
   const { profile, stocks, leaderboard, portfolio } = dashboardState;
 
   body.innerHTML = `
-    <div class="tabs">
-      <button class="tab-btn ${activeStudentTab === 'trade' ? 'active' : ''}" data-tab="trade">Trade</button>
-      <button class="tab-btn ${activeStudentTab === 'positions' ? 'active' : ''}" data-tab="positions">Positions</button>
-      <button class="tab-btn ${activeStudentTab === 'resources' ? 'active' : ''}" data-tab="resources">Resources</button>
-    </div>
+    <nav class="tabs" aria-label="Student navigation">
+      ${['trade', 'research', 'accounts'].map(name => `<button class="tab-btn ${activeStudentTab === name ? 'active' : ''}" data-tab="${name}" ${activeStudentTab === name ? 'aria-current="page"' : ''}>${name[0].toUpperCase() + name.slice(1)}</button>`).join('')}
+    </nav>
     <div id="tab-content"></div>
   `;
 
   body.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      if (tradeBusy) return;
       activeStudentTab = btn.dataset.tab;
       renderStudentTabs();
     });
@@ -171,47 +181,75 @@ function renderStudentTabs() {
 
   const content = document.getElementById('tab-content');
   if (activeStudentTab === 'trade') {
-    content.innerHTML = renderTradeTab(stocks);
+    content.innerHTML = renderTradeTab(stocks, portfolio);
+    const form = document.getElementById('trade-form');
+    if (pendingOrder) {
+      document.getElementById('trade-action').value = pendingOrder.action;
+      document.getElementById('trade-ticker').value = pendingOrder.ticker;
+      document.getElementById('trade-shares').value = pendingOrder.shares;
+      setTicketLocked(true);
+    }
+    form.addEventListener('input', updateTradeEstimate);
+    updateTradeEstimate();
     document.getElementById('trade-form').addEventListener('submit', async event => {
       event.preventDefault();
-      await handleTrade(profile.id, stocks);
+      await handleTrade();
     });
-  } else if (activeStudentTab === 'positions') {
+  } else if (activeStudentTab === 'accounts') {
     content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
-    attachTickerClicks();
   } else {
-    content.innerHTML = renderResourcesTab();
+    content.innerHTML = renderMarketTable(stocks) + renderResourcesTab();
+    attachTickerClicks();
   }
 }
 
-function renderTradeTab(stocks) {
+function renderTradeTab(stocks, portfolio) {
   return `
-    <div class="card">
-      <h2>Trade</h2>
+    <div class="grid grid-2 trade-layout">
+    <section class="card">
+      <p class="eyebrow">CLASSROOM TRADING</p>
+      <h2>Trade ticket</h2>
+      <p class="small-text">Buy or sell whole shares with your classroom cash.</p>
+      <div id="trade-message" role="status" aria-live="polite">${tradeNotice ? `<div class="message ${tradeNotice.error ? 'error' : 'success'}">${escapeHtml(tradeNotice.text)}</div>` : ''}</div>
+      ${portfolio.missing ? '<div class="message error">No portfolio found. Contact your teacher.</div>' : ''}
+      ${!stocks.length ? '<div class="message">No stocks are available yet. Ask your teacher to add a stock.</div>' : ''}
       <form id="trade-form">
-        <label>Action</label>
+        <label for="trade-action">Action</label>
         <select id="trade-action" required>
           <option value="buy">Buy</option>
           <option value="sell">Sell</option>
         </select>
-        <label>Ticker</label>
+        <label for="trade-ticker">Stock</label>
         <select id="trade-ticker" required>
-          ${stocks.map(stock => `<option value="${stock.ticker}">${stock.ticker} — ${stock.name}</option>`).join('')}
+          ${stocks.map(stock => `<option value="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)} — ${escapeHtml(stock.name)}</option>`).join('')}
         </select>
-        <label>Shares</label>
-        <input id="trade-shares" type="number" min="1" step="1" value="1" required />
-        <button type="submit">Submit trade</button>
+        <label for="trade-shares">Number of shares</label>
+        <input id="trade-shares" type="number" min="1" max="2147483647" step="1" value="1" required />
+        <p class="small-text">Order type: <strong>Market</strong></p>
+        <p class="small-text">A new quote is requested when you submit. Your final price may differ from this estimate. Outside market hours, orders use the latest available market quote. Teacher price overrides take precedence.</p>
+        <button id="trade-submit" type="submit">Place market order</button>
       </form>
+    </section>
+    <aside class="card order-summary">
+      <h2>Order preview</h2>
+      <p class="small-text">Available cash</p>
+      <p class="cash-amount">${formatCurrency(portfolio.cash)}</p>
+      <div id="trade-estimate" aria-live="polite"></div>
+    </aside>
     </div>
-    <div class="card">
-      <h3>Market</h3>
+  `;
+}
+
+function renderMarketTable(stocks) {
+  return `<div class="card"><h2>Research</h2><p class="small-text">Explore the classroom stock list. Select a symbol to view its price history.</p>
+      <div class="table-scroll">
       <table class="table">
-        <thead><tr><th>Symbol</th><th>Name</th><th>Price</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Name</th><th>Latest saved price</th></tr></thead>
         <tbody>
-          ${stocks.map(s => `<tr><td class="clickable-ticker" data-ticker="${s.ticker}">${s.ticker}</td><td>${s.name}</td><td>${formatCurrency(s.current_price)}</td></tr>`).join('')}
+          ${stocks.map(s => `<tr><td><button class="ticker-link clickable-ticker" data-ticker="${escapeHtml(s.ticker)}">${escapeHtml(s.ticker)}</button></td><td>${escapeHtml(s.name)}</td><td>${formatCurrency(s.current_price)}${s.is_overridden ? ' <span class="small-text">Classroom price</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="3">No stocks available yet.</td></tr>'}
         </tbody>
       </table>
-    </div>
+      </div></div>
   `;
 }
 
@@ -219,12 +257,16 @@ function renderPositionsTab(profile, portfolio, stocks, leaderboard) {
   const totalValue = calculatePortfolioValue(portfolio, stocks);
   return `
     <div class="card">
-      <h2>Your portfolio</h2>
+      <h2>Accounts</h2>
       ${portfolio.missing ? '<div class="message error">No portfolio found for your account. Contact your admin.</div>' : ''}
       <p>Cash: <strong>${formatCurrency(portfolio.cash)}</strong></p>
       <p>Total value: <strong>${formatCurrency(totalValue)}</strong></p>
       <p class="small-text">Starting cash: ${formatCurrency(profile.starting_cash)}</p>
       ${renderHoldingsTable(portfolio.holdings, stocks)}
+    </div>
+    <div class="card">
+      <h2>Trade history</h2>
+      ${renderTradeHistory(dashboardState.history)}
     </div>
     <div class="card">
       <h2>Leaderboard</h2>
@@ -379,7 +421,7 @@ async function loadStocks() {
 async function loadStudentPortfolio(studentId) {
   const { data } = await supabase.from('portfolios').select('*').eq('student_id', studentId).single();
   if (!data) {
-    return { cash: 0, holdings: {} };
+    return { cash: 0, holdings: {}, missing: true };
   }
   return { cash: Number(data.cash), holdings: data.holdings || {} };
 }
@@ -413,47 +455,121 @@ async function loadLeaderboard(stocks) {
   return leaderRows.sort((a, b) => b.value - a.value);
 }
 
-async function handleTrade(studentId, stocks) {
-  const action = document.getElementById('trade-action').value;
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  return value && Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unavailable';
+}
+
+async function loadTradeHistory(studentId) {
+  const { data, error } = await supabase.from('transactions').select('*').eq('student_id', studentId)
+    .order('timestamp', { ascending: false }).limit(50);
+  return { rows: data || [], error: Boolean(error) };
+}
+
+function renderTradeHistory(history) {
+  if (history.error) return '<p class="message error">Trade history could not be loaded. Refresh to try again.</p>';
+  if (!history.rows.length) return '<p>No trades yet. Your completed orders will appear here.</p>';
+  return `<p class="small-text">Your 50 most recent trades</p><div class="table-scroll"><table class="table">
+    <thead><tr><th>Date</th><th>Action</th><th>Stock</th><th>Shares</th><th>Fill price</th><th>Total</th></tr></thead>
+    <tbody>${history.rows.map(row => `<tr><td>${formatDate(row.timestamp)}</td><td>${row.action === 'buy' ? 'Buy' : 'Sell'}</td>
+    <td>${escapeHtml(row.ticker)}</td><td>${Number(row.shares)}</td><td>${formatPrice(row.price)}</td><td>${formatCurrency(row.total_amount ?? row.price * row.shares)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+function formatPrice(value) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
+}
+
+function setTicketLocked(locked) {
+  ['trade-action', 'trade-ticker', 'trade-shares'].forEach(id => { document.getElementById(id).disabled = locked; });
+}
+
+function updateTradeEstimate() {
+  const { stocks, portfolio } = dashboardState;
   const ticker = document.getElementById('trade-ticker').value;
   const shares = Number(document.getElementById('trade-shares').value);
+  const action = document.getElementById('trade-action').value;
+  const stock = stocks.find(row => row.ticker === ticker);
+  const validShares = Number.isSafeInteger(shares) && shares > 0 && shares <= 2147483647;
+  const price = Number(stock?.current_price);
+  const total = validShares && price > 0 ? Math.round(shares * price * 100) / 100 : null;
+  const owned = Number(portfolio.holdings[ticker] || 0);
+  let warning = '';
+  if (!validShares) warning = 'Enter a positive whole number of shares.';
+  else if (action === 'sell' && shares > owned) warning = 'You do not own enough shares to sell this quantity.';
+  else if (action === 'buy' && total > portfolio.cash) warning = 'This estimate exceeds your available cash. The final balance check uses the execution quote.';
+  document.getElementById('trade-estimate').innerHTML = `<dl class="ticket-details">
+    <div><dt>Stock</dt><dd>${escapeHtml(ticker || '—')}</dd></div>
+    <div><dt>Shares owned</dt><dd>${owned}</dd></div>
+    <div><dt>${stock?.is_overridden ? 'Classroom price' : 'Latest saved price'}</dt><dd>${price > 0 ? formatPrice(price) : 'Unavailable'}</dd></div>
+    <div><dt>Price as of</dt><dd>${formatDate(stock?.last_updated)}</dd></div>
+    <div><dt>Estimated ${action === 'buy' ? 'cost' : 'proceeds'}</dt><dd>${total !== null ? formatCurrency(total) : '—'}</dd></div>
+    <div><dt>Estimated cash after</dt><dd>${total !== null ? formatCurrency(portfolio.cash + (action === 'buy' ? -total : total)) : '—'}</dd></div>
+    </dl>${warning ? `<p class="message error">${warning}</p>` : ''}
+    ${pendingOrder ? '<p class="message">This ticket has an unconfirmed result. Retry it to retrieve the receipt or complete the order. The same ticket will never be filled twice.</p>' : ''}`;
+  const submit = document.getElementById('trade-submit');
+  submit.disabled = tradeBusy || (!pendingOrder && (!stock || portfolio.missing || !validShares || (action === 'sell' && shares > owned)));
+  submit.textContent = tradeBusy ? 'Placing order…' : pendingOrder ? 'Retry this ticket' : `Place market ${action} order`;
+}
 
-  const stock = stocks.find(item => item.ticker === ticker);
-  if (!stock) {
-    return alert('Ticker not found.');
-  }
-
-  const portfolio = await loadStudentPortfolio(studentId);
-  const price = Number(stock.current_price);
-  const cost = price * shares;
-
-  if (action === 'buy' && cost > portfolio.cash) {
-    return alert('Not enough cash to complete this trade.');
-  }
-
-  const tickerShares = portfolio.holdings[ticker] || 0;
-  if (action === 'sell' && shares > tickerShares) {
-    return alert('Not enough shares to sell.');
-  }
-
-  const updatedHoldings = { ...portfolio.holdings };
-  if (action === 'buy') {
-    updatedHoldings[ticker] = tickerShares + shares;
-  } else {
-    updatedHoldings[ticker] = tickerShares - shares;
-    if (updatedHoldings[ticker] <= 0) {
-      delete updatedHoldings[ticker];
+async function handleTrade() {
+  if (tradeBusy) return;
+  const studentId = dashboardState.profile.id;
+  const storageKey = `trade-ticket:${studentId}`;
+  const order = pendingOrder || {
+    action: document.getElementById('trade-action').value,
+    ticker: document.getElementById('trade-ticker').value,
+    shares: Number(document.getElementById('trade-shares').value),
+    request_id: crypto.randomUUID(),
+  };
+  if (!Number.isSafeInteger(order.shares) || order.shares < 1 || order.shares > 2147483647 || !order.ticker) return;
+  tradeBusy = true;
+  tradeNotice = null;
+  document.getElementById('trade-message').textContent = '';
+  setTicketLocked(true);
+  updateTradeEstimate();
+  let completed = false;
+  try {
+    // Save before sending so refreshes and lost responses can reuse the same ticket.
+    sessionStorage.setItem(storageKey, JSON.stringify(order));
+    pendingOrder = order;
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) throw new Error('Sign in again, then retry this ticket.');
+    const response = await fetch(`${API_BASE}/trade`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify(order), signal: AbortSignal.timeout(20000),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.trade) {
+      if (result.uncertain !== true && response.status < 500) {
+        sessionStorage.removeItem(storageKey);
+        pendingOrder = null;
+      }
+      throw new Error(result.error || 'The order result could not be confirmed. Retry this ticket.');
     }
+    const trade = result.trade;
+    completed = true;
+    sessionStorage.removeItem(storageKey);
+    pendingOrder = null;
+    tradeNotice = { text: `${trade.action === 'buy' ? 'Bought' : 'Sold'} ${trade.shares} ${trade.ticker} at ${formatPrice(trade.price)} per share. Total: ${formatCurrency(trade.total)}. Cash after trade: ${formatCurrency(trade.cash)}. Receipt: ${trade.id}.` };
+    // Update the known cash immediately; reload holdings, research prices, and history together.
+    dashboardState.portfolio.cash = Number(trade.cash);
+    const stocks = await loadStocks();
+    const [portfolio, history, leaderboard] = await Promise.all([
+      loadStudentPortfolio(studentId), loadTradeHistory(studentId), loadLeaderboard(stocks),
+    ]);
+    dashboardState = { ...dashboardState, stocks, portfolio, history, leaderboard };
+  } catch (error) {
+    if (completed) tradeNotice.text += ' Refresh Accounts to load the latest balances.';
+    else tradeNotice = { error: true, text: error.name === 'TimeoutError' ? 'The order result was not confirmed. Retry this same ticket to avoid a duplicate trade.' : error.message };
+  } finally {
+    tradeBusy = false;
+    renderStudentTabs();
   }
-
-  const updatedCash = action === 'buy' ? portfolio.cash - cost : portfolio.cash + cost;
-
-  await Promise.all([
-    supabase.from('portfolios').update({ cash: updatedCash, holdings: updatedHoldings, updated_at: new Date().toISOString() }).eq('student_id', studentId),
-    supabase.from('transactions').insert([{ student_id: studentId, ticker, action, shares, price, timestamp: new Date().toISOString() }]),
-  ]);
-
-  start();
 }
 
 async function handleCreateStudent() {
