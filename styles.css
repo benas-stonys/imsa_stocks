@@ -142,6 +142,20 @@ textarea {
   color: var(--muted);
 }
 
+.trade-layout { align-items: start; }
+.eyebrow { color: var(--primary); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; }
+.cash-amount { font-size: 2.2rem; font-weight: 700; }
+.ticket-details { margin: 0; }
+.ticket-details > div { display: flex; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid var(--border); }
+.ticket-details dt { color: var(--muted); }
+.ticket-details dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; }
+.ticker-link { padding: 0; background: transparent; border-radius: 0; }
+#trade-submit { width: 100%; }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.message { overflow-wrap: anywhere; }
+
 @media (max-width: 760px) {
   .grid-2 {
     grid-template-columns: 1fr;
