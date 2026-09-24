@@ -100,7 +100,8 @@ async function createAdmin({ email, password, username }) {
 }
 
 async function createStudent({ email, password, username, starting_cash }) {
-  if (!email || !password || !username || !starting_cash) {
+  const cash = Number(starting_cash);
+  if (!email || !password || !username || !Number.isFinite(cash) || cash <= 0) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing student fields' }) };
   }
 
@@ -116,9 +117,9 @@ async function createStudent({ email, password, username, starting_cash }) {
   }
 
   const newUser = data.user;
-  const cash = Number(starting_cash) || 10000;
-
-  const { error: profileError } = await supabase.from('profiles').insert([{ id: newUser.id, username, role: 'student', starting_cash: cash }]);
+  // Supabase may already have created this new user's profile via an Auth trigger.
+  // Updating that same new ID lets provisioning continue to the portfolio step.
+  const { error: profileError } = await supabase.from('profiles').upsert([{ id: newUser.id, username, role: 'student', starting_cash: cash }], { onConflict: 'id' });
   if (profileError) {
     return { statusCode: 500, body: JSON.stringify({ error: profileError.message }) };
   }

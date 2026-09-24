@@ -25,6 +25,8 @@ Me goofing off for now with this project
 4. Confirm Netlify has `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `FINNHUB_API_KEY` (or `FINNHUB_KEY`) for the deployed context. Never put the service role or market-data key in browser code.
 5. Verify with a disposable student account: buy, sell, insufficient funds, and Accounts/history updates. Do not test purchases against a real student's portfolio.
 
+For an existing account created without a portfolio, apply `supabase/migrations/202609230002_initialize_untraded_portfolios.sql`. It uses the student's configured starting cash only when both the portfolio and prior trades are absent. Existing balances and holdings are preserved. Student provisioning also supports projects whose Auth trigger already creates a profile.
+
 Each order requests the provider's latest quote at submission; saved prices are only estimates. These are immediate simulated fills, not orders routed to a broker. Outside trading hours, the last available quote is used; quotes older than seven days are rejected. Existing teacher price overrides remain authoritative. Limit orders, fractional shares, fees, and exchange-session queuing are not implemented.
 
 The Netlify handler verifies the user's session and student role, chooses the execution price, and calls a service-role-only Postgres function. That function locks the student's portfolio, validates cash/shares, then writes cash, holdings, and the transaction atomically. A per-student ticket UUID prevents retries from executing twice. Pending tickets are retained in browser session storage until a confirmed outcome; a network timeout can be retried safely. Prices are stored to four decimal places and order totals are rounded to cents in Postgres.
