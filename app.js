@@ -516,6 +516,7 @@ async function loadResearchPanel(ticker) {
   if (request !== researchRequest || !document.getElementById('research-panel')) return;
   if (data.error) { target.innerHTML = `<div class="card message error">${escapeHtml(data.error)}</div>`; return; }
   document.getElementById('research-title').textContent = `${data.ticker} · ${data.profile?.name || ''}`;
+  document.getElementById('research-status').textContent = 'Ready';
   renderResearchStats(data);
   let mode = 'candles';
   const draw = () => drawResearchChart(data, mode);
@@ -530,12 +531,28 @@ function renderResearchStats(data) {
 }
 
 function drawResearchChart(data, mode) {
-  const canvas = document.getElementById('research-chart'); if (!canvas || !window.Chart) return;
-  if (window.researchChart) window.researchChart.destroy();
-  const c = data.candles || {}; const labels = (c.t || []).map(value => new Date(value * 1000).toLocaleDateString());
-  const close = c.c || []; const up = close.at(-1) >= close[0];
-  if (mode === 'mountain') window.researchChart = new Chart(canvas, { type: 'line', data: { labels, datasets: [{ data: close, borderColor: up ? '#16a34a' : '#dc2626', backgroundColor: up ? 'rgba(22,163,74,.18)' : 'rgba(220,38,38,.18)', fill: true, pointRadius: 0, tension: .25 }] }, options: chartOptions() });
-  else window.researchChart = new Chart(canvas, { type: 'candlestick', data: { labels, datasets: [{ label: data.ticker, data: (c.t || []).map((time, i) => ({ x: time * 1000, o: c.o[i], h: c.h[i], l: c.l[i], c: c.c[i] })) }] }, options: { ...chartOptions(), parsing: false } });
+  const canvas = document.getElementById('research-chart'); if (!canvas) return;
+  const context = canvas.getContext('2d'); if (!context) return;
+  const c = data.candles || {};
+  const points = (c.t || []).map((time, i) => ({ time, open: Number(c.o?.[i]), high: Number(c.h?.[i]), low: Number(c.l?.[i]), close: Number(c.c?.[i]) })).filter(point => Number.isFinite(point.close));
+  if (!points.length) { context.clearRect(0, 0, canvas.width, canvas.height); context.font = '14px system-ui'; context.fillStyle = '#64748b'; context.fillText('No historical chart data is available for this symbol.', 20, 40); return; }
+  const bounds = canvas.parentElement.getBoundingClientRect(); const ratio = window.devicePixelRatio || 1; const width = Math.max(320, Math.floor(bounds.width)); const height = Math.max(240, Math.floor(bounds.height));
+  canvas.width = width * ratio; canvas.height = height * ratio; canvas.style.width = `${width}px`; canvas.style.height = `${height}px`; context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height);
+  const padding = { top: 18, right: 16, bottom: 34, left: 56 }; const plotWidth = width - padding.left - padding.right; const plotHeight = height - padding.top - padding.bottom;
+  const values = points.flatMap(point => mode === 'mountain' ? [point.close] : [point.high, point.low, point.open, point.close]).filter(Number.isFinite);
+  const min = Math.min(...values); const max = Math.max(...values); const spread = Math.max(max - min, max * 0.01, 0.01); const yMin = min - spread * 0.08; const yMax = max + spread * 0.08;
+  const x = index => padding.left + (points.length === 1 ? plotWidth / 2 : index * plotWidth / (points.length - 1)); const y = value => padding.top + (yMax - value) * plotHeight / (yMax - yMin);
+  context.strokeStyle = '#dbe3ef'; context.lineWidth = 1; context.fillStyle = '#64748b'; context.font = '11px system-ui';
+  for (let tick = 0; tick <= 4; tick += 1) { const value = yMin + (yMax - yMin) * tick / 4; const yy = y(value); context.beginPath(); context.moveTo(padding.left, yy); context.lineTo(width - padding.right, yy); context.stroke(); context.fillText(formatPrice(value), 4, yy + 4); }
+  if (mode === 'mountain') {
+    const rising = points.at(-1).close >= points[0].close; const color = rising ? '#16a34a' : '#dc2626'; const gradient = context.createLinearGradient(0, padding.top, 0, height - padding.bottom); gradient.addColorStop(0, rising ? 'rgba(22,163,74,.28)' : 'rgba(220,38,38,.28)'); gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    context.beginPath(); points.forEach((point, index) => index ? context.lineTo(x(index), y(point.close)) : context.moveTo(x(index), y(point.close))); context.lineTo(x(points.length - 1), height - padding.bottom); context.lineTo(x(0), height - padding.bottom); context.closePath(); context.fillStyle = gradient; context.fill();
+    context.beginPath(); points.forEach((point, index) => index ? context.lineTo(x(index), y(point.close)) : context.moveTo(x(index), y(point.close))); context.strokeStyle = color; context.lineWidth = 2; context.stroke();
+  } else {
+    const candleWidth = Math.max(2, Math.min(12, plotWidth / Math.max(points.length, 1) * 0.65));
+    points.forEach((point, index) => { const open = Number.isFinite(point.open) ? point.open : point.close; const high = Number.isFinite(point.high) ? point.high : Math.max(open, point.close); const low = Number.isFinite(point.low) ? point.low : Math.min(open, point.close); const rising = point.close >= open; const color = rising ? '#16a34a' : '#dc2626'; context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 1; context.beginPath(); context.moveTo(x(index), y(high)); context.lineTo(x(index), y(low)); context.stroke(); const top = y(Math.max(open, point.close)); const bottom = y(Math.min(open, point.close)); context.fillRect(x(index) - candleWidth / 2, top, candleWidth, Math.max(1, bottom - top)); });
+  }
+  context.fillStyle = '#64748b'; context.font = '11px system-ui'; [0, Math.floor(points.length / 2), points.length - 1].filter((index, position, list) => list.indexOf(index) === position).forEach(index => context.fillText(new Date(points[index].time * 1000).toLocaleDateString(), Math.max(padding.left, x(index) - 28), height - 10));
 }
 
 function chartOptions() { return { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } } }; }
