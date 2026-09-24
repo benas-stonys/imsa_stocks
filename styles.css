@@ -162,6 +162,19 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .stock-results { list-style: none; padding: 0; max-height: 280px; overflow-y: auto; margin: 0 0 20px; }
 .stock-results button { width: 100%; text-align: left; margin-bottom: 6px; }
 .stock-results span { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+.selected-stock { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 8px 0 16px; }
+.selected-stock span { display: block; color: var(--muted); font-size: .85rem; margin-top: 4px; }
+.research-panel { min-height: 390px; }
+.research-heading { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+.chart-tabs { display: flex; gap: 8px; margin: 10px 0; }
+.chart-tab { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 8px 12px; }
+.chart-tab.active { color: var(--text); border-color: var(--primary); }
+.chart-wrap { height: 300px; position: relative; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
+.stat { border: 1px solid var(--border); border-radius: 12px; padding: 10px; min-width: 0; }
+.stat span { display: block; color: var(--muted); font-size: .78rem; }
+.stat strong { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .research-heading { display: block; } }
 
 @media (max-width: 760px) {
   .grid-2 {

@@ -12,6 +12,7 @@ let pendingOrder = null;
 let selectedTicker = '';
 let searchGeneration = 0;
 let quoteBusy = false;
+let researchRequest = 0;
 
 const resourceLinks = [
   { name: 'Yahoo Finance', url: 'https://finance.yahoo.com' },
@@ -196,8 +197,8 @@ function renderStudentTabs() {
       setTicketLocked(true);
     }
     form.addEventListener('input', updateTradeEstimate);
-    document.getElementById('trade-ticker').addEventListener('change', event => { selectedTicker = event.target.value; });
     attachStockSearch();
+    loadResearchPanel(selectedTicker || stocks[0]?.ticker);
     updateTradeEstimate();
     document.getElementById('trade-form').addEventListener('submit', async event => {
       event.preventDefault();
@@ -206,8 +207,9 @@ function renderStudentTabs() {
   } else if (activeStudentTab === 'accounts') {
     content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
   } else {
-    content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section>` + renderMarketTable(stocks) + renderResourcesTab();
+    content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section><section id="research-panel"></section>` + renderMarketTable(stocks) + renderResourcesTab();
     attachStockSearch();
+    loadResearchPanel(selectedTicker || stocks[0]?.ticker);
     attachTickerClicks();
   }
 }
@@ -228,11 +230,9 @@ function renderTradeTab(stocks, portfolio) {
           <option value="buy">Buy</option>
           <option value="sell">Sell</option>
         </select>
-        <label for="trade-ticker">Stock</label>
-        <select id="trade-ticker" required>
-          ${stocks.map(stock => `<option value="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)} — ${escapeHtml(stock.name)}</option>`).join('')}
-          ${pendingOrder && !stocks.some(stock => stock.ticker === pendingOrder.ticker) ? `<option value="${escapeHtml(pendingOrder.ticker)}">${escapeHtml(pendingOrder.ticker)}</option>` : ''}
-        </select>
+        <label>Stock</label>
+        <div id="selected-stock" class="selected-stock"><strong>${escapeHtml(selectedTicker || stocks[0]?.ticker || '')}</strong><span>Use Find a stock above to change it.</span></div>
+        <input id="trade-ticker" type="hidden" value="${escapeHtml(selectedTicker || stocks[0]?.ticker || '')}" />
         <label for="trade-shares">Number of shares</label>
         <input id="trade-shares" type="number" min="1" max="2147483647" step="1" value="1" required />
         <p class="small-text">Order type: <strong>Market</strong></p>
@@ -240,12 +240,15 @@ function renderTradeTab(stocks, portfolio) {
         <button id="trade-submit" type="submit">Place market order</button>
       </form>
     </section>
-    <aside class="card order-summary">
-      <h2>Order preview</h2>
-      <p class="small-text">Available cash</p>
-      <p class="cash-amount">${formatCurrency(portfolio.cash)}</p>
-      <div id="trade-estimate" aria-live="polite"></div>
-    </aside>
+    <div class="trade-side">
+      <aside class="card order-summary">
+        <h2>Order preview</h2>
+        <p class="small-text">Available cash</p>
+        <p class="cash-amount">${formatCurrency(portfolio.cash)}</p>
+        <div id="trade-estimate" aria-live="polite"></div>
+      </aside>
+      <div id="research-panel"></div>
+    </div>
     </div>
   `;
 }
@@ -497,6 +500,47 @@ function setTicketLocked(locked) {
   ['trade-action', 'trade-ticker', 'trade-shares'].forEach(id => { document.getElementById(id).disabled = locked; });
   document.querySelectorAll('#stock-search-form input, #stock-search-form button, #stock-search-results button').forEach(el => { el.disabled = locked; });
 }
+
+function renderResearchPanel() {
+  return `<div class="card research-panel"><div class="research-heading"><div><p class="eyebrow">MARKET RESEARCH</p><h2 id="research-title">Research</h2></div><span id="research-status" class="small-text">Loading…</span></div>
+    <div class="chart-tabs"><button type="button" class="chart-tab active" data-chart="candles">Candles</button><button type="button" class="chart-tab" data-chart="mountain">Mountain</button></div>
+    <div class="chart-wrap"><canvas id="research-chart" height="260"></canvas></div><div id="research-stats" class="stats-grid"></div></div>`;
+}
+
+async function loadResearchPanel(ticker) {
+  const target = document.getElementById('research-panel');
+  if (!target || !ticker) return;
+  target.innerHTML = renderResearchPanel();
+  const request = ++researchRequest;
+  const data = await stockDataRequest(`stock-research?ticker=${encodeURIComponent(ticker)}`).catch(error => ({ error: error.message }));
+  if (request !== researchRequest || !document.getElementById('research-panel')) return;
+  if (data.error) { target.innerHTML = `<div class="card message error">${escapeHtml(data.error)}</div>`; return; }
+  document.getElementById('research-title').textContent = `${data.ticker} · ${data.profile?.name || ''}`;
+  renderResearchStats(data);
+  let mode = 'candles';
+  const draw = () => drawResearchChart(data, mode);
+  target.querySelectorAll('.chart-tab').forEach(button => button.addEventListener('click', () => { mode = button.dataset.chart; target.querySelectorAll('.chart-tab').forEach(item => item.classList.toggle('active', item === button)); draw(); }));
+  draw();
+}
+
+function renderResearchStats(data) {
+  const metric = data.metric || {}; const quote = data.quote || {}; const profile = data.profile || {};
+  const entries = [['Price', formatPrice(quote.c)], ['Change', `${Number(quote.dp || 0).toFixed(2)}%`], ['Open', formatPrice(quote.o)], ['Day high', formatPrice(quote.h)], ['Day low', formatPrice(quote.l)], ['Volume', formatNumber(quote.v || metric['10DayAverageTradingVolume'])], ['52-week high', formatPrice(metric['52WeekHigh'] || metric['52WeekHighPrice'])], ['52-week low', formatPrice(metric['52WeekLow'] || metric['52WeekLowPrice'])], ['EPS (TTM)', formatPrice(metric.epsTTM)], ['P/E (TTM)', formatNumber(metric.peTTM)], ['Market cap', formatLargeNumber(profile.marketCapitalization || metric.marketCapitalization)], ['Exchange', profile.exchange || '—']];
+  document.getElementById('research-stats').innerHTML = entries.map(([label, value]) => `<div class="stat"><span>${label}</span><strong>${value || '—'}</strong></div>`).join('');
+}
+
+function drawResearchChart(data, mode) {
+  const canvas = document.getElementById('research-chart'); if (!canvas || !window.Chart) return;
+  if (window.researchChart) window.researchChart.destroy();
+  const c = data.candles || {}; const labels = (c.t || []).map(value => new Date(value * 1000).toLocaleDateString());
+  const close = c.c || []; const up = close.at(-1) >= close[0];
+  if (mode === 'mountain') window.researchChart = new Chart(canvas, { type: 'line', data: { labels, datasets: [{ data: close, borderColor: up ? '#16a34a' : '#dc2626', backgroundColor: up ? 'rgba(22,163,74,.18)' : 'rgba(220,38,38,.18)', fill: true, pointRadius: 0, tension: .25 }] }, options: chartOptions() });
+  else window.researchChart = new Chart(canvas, { type: 'candlestick', data: { labels, datasets: [{ label: data.ticker, data: (c.t || []).map((time, i) => ({ x: time * 1000, o: c.o[i], h: c.h[i], l: c.l[i], c: c.c[i] })) }] }, options: { ...chartOptions(), parsing: false } });
+}
+
+function chartOptions() { return { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } } }; }
+function formatNumber(value) { return Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value) : '—'; }
+function formatLargeNumber(value) { return Number.isFinite(Number(value)) ? `${formatNumber(Number(value) / 1000)}B` : '—'; }
 
 function renderStockSearch() {
   return `<form id="stock-search-form" class="stock-search">
