@@ -516,7 +516,7 @@ async function loadResearchPanel(ticker) {
   if (request !== researchRequest || !document.getElementById('research-panel')) return;
   if (data.error) { target.innerHTML = `<div class="card message error">${escapeHtml(data.error)}</div>`; return; }
   document.getElementById('research-title').textContent = `${data.ticker} · ${data.profile?.name || ''}`;
-  document.getElementById('research-status').textContent = 'Ready';
+  document.getElementById('research-status').textContent = data.candles?.fallback ? 'Latest quote' : 'Ready';
   renderResearchStats(data);
   let mode = 'candles';
   const draw = () => drawResearchChart(data, mode);
