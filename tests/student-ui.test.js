@@ -109,3 +109,40 @@ test('successful orders show a receipt and refresh Accounts holdings and history
   assert.match(doc.body.textContent, /Buy/);
   dom.window.close();
 });
+
+test('company search selects and quotes a stock outside the classroom list', async () => {
+  const { dom, win, doc } = setup();
+  const urls = [];
+  win.fetch = async url => {
+    urls.push(url);
+    return { ok: true, json: async () => url.includes('stock-search')
+      ? { stocks: [{ ticker: 'NVDA', name: 'NVIDIA CORP' }] }
+      : { stock: { ticker: 'NVDA', name: 'NVIDIA CORP', current_price: 150, last_updated: '2026-09-23T15:00:00Z' } } };
+  };
+  doc.getElementById('stock-query').value = 'nvidia';
+  doc.getElementById('stock-search-form').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  doc.querySelector('[data-symbol="NVDA"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(doc.getElementById('trade-ticker').value, 'NVDA');
+  assert.match(doc.getElementById('trade-estimate').textContent, /\$150\.00/);
+  assert.equal(doc.getElementById('trade-submit').disabled, false);
+  assert.match(urls[0], /stock-search\?q=nvidia/);
+  assert.match(urls[1], /stock-quote\?ticker=NVDA/);
+  dom.window.close();
+});
+
+test('late search results do not overwrite another tab and empty results remain useful', async () => {
+  const { dom, win, doc } = setup();
+  let release;
+  win.fetch = async () => { await new Promise(resolve => { release = resolve; }); return { ok: true, json: async () => ({ stocks: [] }) }; };
+  doc.getElementById('stock-query').value = 'unknown';
+  doc.getElementById('stock-search-form').dispatchEvent(new win.Event('submit', { cancelable: true }));
+  await new Promise(resolve => setImmediate(resolve));
+  doc.querySelector('[data-tab="accounts"]').click();
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(doc.body.textContent, /Trade history/);
+  assert.equal(doc.getElementById('stock-search-results'), null);
+  dom.window.close();
+});

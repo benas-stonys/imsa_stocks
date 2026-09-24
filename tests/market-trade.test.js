@@ -36,20 +36,23 @@ test('quotes require a successful fresh response and respect explicit classroom 
   assert.equal(overridden.source, 'classroom');
 });
 
-function apiFixture({ role = 'student', existing = null, rpcError = null, user = { id: student } } = {}) {
+function apiFixture({ role = 'student', existing = null, rpcError = null, user = { id: student }, saved = { ticker: 'AAPL' }, resolveError = false, quoteError = false } = {}) {
   const calls = [];
+  const registrations = [];
   const db = {
     auth: { getUser: async () => ({ data: { user } }) },
     from(table) {
       const query = { select: () => query, eq: () => query,
         single: async () => ({ data: table === 'profiles' ? { role } : { ticker: 'AAPL' } }),
-        maybeSingle: async () => ({ data: existing }) };
+        maybeSingle: async () => ({ data: table === 'transactions' ? existing : saved }),
+        upsert: async (rows, options) => { registrations.push({ rows, options }); return {}; } };
       return query;
     },
     rpc: async (name, args) => { calls.push(args); return { data: { id: 'receipt', cash: 800 }, error: rpcError }; },
   };
-  return { calls, handler: createHandler({ getClient: () => db,
-    quote: async () => ({ price: 100, asOf: new Date().toISOString(), source: 'market' }) }) };
+  return { calls, registrations, handler: createHandler({ getClient: () => db,
+    resolve: async ticker => { if (resolveError) throw new Error('Symbol not found'); return { ticker, name: 'NVIDIA CORP' }; },
+    quote: async () => { if (quoteError) throw new Error('No usable quote'); return { price: 100, asOf: new Date().toISOString(), source: 'market' }; } }) };
 }
 const event = body => ({ httpMethod: 'POST', headers: { authorization: 'Bearer student-session' }, body: JSON.stringify(body) });
 
@@ -79,6 +82,28 @@ test('endpoint replays completed tickets without another quote and marks ambiguo
   assert.equal((await handler(event({ ...ticket, shares: 3 }))).statusCode, 409);
   const ambiguous = await apiFixture({ rpcError: { code: 'NETWORK' } }).handler(event(order()));
   assert.equal(JSON.parse(ambiguous.body).uncertain, true);
+});
+
+test('a provider-supported stock outside the starter list is registered and traded at the server quote', async () => {
+  const { handler, calls, registrations } = apiFixture({ saved: null });
+  const result = await handler(event({ ...order(), ticker: 'NVDA', price: 1, name: 'Forged name' }));
+  assert.equal(result.statusCode, 200);
+  assert.equal(registrations[0].rows[0].name, 'NVIDIA CORP');
+  assert.equal(registrations[0].rows[0].ticker, 'NVDA');
+  assert.equal(registrations[0].options.ignoreDuplicates, true);
+  assert.equal(calls[0].p_ticker, 'NVDA');
+  assert.equal(calls[0].p_price, 100);
+});
+
+test('unknown symbols and unavailable quotes never register a stock or execute an order', async () => {
+  for (const options of [{ resolveError: true }, { quoteError: true }]) {
+    const fixture = apiFixture({ saved: null, ...options });
+    const result = await fixture.handler(event({ ...order(), ticker: 'UNKNOWN' }));
+    assert.equal(result.statusCode, 503);
+    assert.equal(JSON.parse(result.body).uncertain, false);
+    assert.equal(fixture.calls.length, 0);
+    assert.equal(fixture.registrations.length, 0);
+  }
 });
 
 test('Postgres migration executes trades atomically with validation, replay, and access controls', async t => {

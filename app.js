@@ -9,6 +9,9 @@ let activeStudentTab = 'trade';
 let tradeBusy = false;
 let tradeNotice = null;
 let pendingOrder = null;
+let selectedTicker = '';
+let searchGeneration = 0;
+let quoteBusy = false;
 
 const resourceLinks = [
   { name: 'Yahoo Finance', url: 'https://finance.yahoo.com' },
@@ -161,6 +164,8 @@ async function renderDashboard(profile, user) {
 }
 
 function renderStudentTabs() {
+  searchGeneration++;
+  quoteBusy = false;
   const body = document.getElementById('dashboard-body');
   const { profile, stocks, leaderboard, portfolio } = dashboardState;
 
@@ -182,6 +187,7 @@ function renderStudentTabs() {
   const content = document.getElementById('tab-content');
   if (activeStudentTab === 'trade') {
     content.innerHTML = renderTradeTab(stocks, portfolio);
+    if (selectedTicker && stocks.some(stock => stock.ticker === selectedTicker)) document.getElementById('trade-ticker').value = selectedTicker;
     const form = document.getElementById('trade-form');
     if (pendingOrder) {
       document.getElementById('trade-action').value = pendingOrder.action;
@@ -190,6 +196,8 @@ function renderStudentTabs() {
       setTicketLocked(true);
     }
     form.addEventListener('input', updateTradeEstimate);
+    document.getElementById('trade-ticker').addEventListener('change', event => { selectedTicker = event.target.value; });
+    attachStockSearch();
     updateTradeEstimate();
     document.getElementById('trade-form').addEventListener('submit', async event => {
       event.preventDefault();
@@ -198,7 +206,8 @@ function renderStudentTabs() {
   } else if (activeStudentTab === 'accounts') {
     content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
   } else {
-    content.innerHTML = renderMarketTable(stocks) + renderResourcesTab();
+    content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section>` + renderMarketTable(stocks) + renderResourcesTab();
+    attachStockSearch();
     attachTickerClicks();
   }
 }
@@ -212,7 +221,7 @@ function renderTradeTab(stocks, portfolio) {
       <p class="small-text">Buy or sell whole shares with your classroom cash.</p>
       <div id="trade-message" role="status" aria-live="polite">${tradeNotice ? `<div class="message ${tradeNotice.error ? 'error' : 'success'}">${escapeHtml(tradeNotice.text)}</div>` : ''}</div>
       ${portfolio.missing ? '<div class="message error">No portfolio found. Contact your teacher.</div>' : ''}
-      ${!stocks.length ? '<div class="message">No stocks are available yet. Ask your teacher to add a stock.</div>' : ''}
+      ${renderStockSearch()}
       <form id="trade-form">
         <label for="trade-action">Action</label>
         <select id="trade-action" required>
@@ -222,6 +231,7 @@ function renderTradeTab(stocks, portfolio) {
         <label for="trade-ticker">Stock</label>
         <select id="trade-ticker" required>
           ${stocks.map(stock => `<option value="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)} — ${escapeHtml(stock.name)}</option>`).join('')}
+          ${pendingOrder && !stocks.some(stock => stock.ticker === pendingOrder.ticker) ? `<option value="${escapeHtml(pendingOrder.ticker)}">${escapeHtml(pendingOrder.ticker)}</option>` : ''}
         </select>
         <label for="trade-shares">Number of shares</label>
         <input id="trade-shares" type="number" min="1" max="2147483647" step="1" value="1" required />
@@ -241,7 +251,7 @@ function renderTradeTab(stocks, portfolio) {
 }
 
 function renderMarketTable(stocks) {
-  return `<div class="card"><h2>Research</h2><p class="small-text">Explore the classroom stock list. Select a symbol to view its price history.</p>
+  return `<div class="card"><h2>Followed stocks</h2><p class="small-text">Stocks already used in the app. Search above to find more. Select a symbol to view its saved price history.</p>
       <div class="table-scroll">
       <table class="table">
         <thead><tr><th>Symbol</th><th>Name</th><th>Latest saved price</th></tr></thead>
@@ -485,6 +495,73 @@ function formatPrice(value) {
 
 function setTicketLocked(locked) {
   ['trade-action', 'trade-ticker', 'trade-shares'].forEach(id => { document.getElementById(id).disabled = locked; });
+  document.querySelectorAll('#stock-search-form input, #stock-search-form button, #stock-search-results button').forEach(el => { el.disabled = locked; });
+}
+
+function renderStockSearch() {
+  return `<form id="stock-search-form" class="stock-search">
+    <label for="stock-query">Find any supported U.S. stock</label>
+    <p class="small-text">Search a company name or ticker, such as Nvidia or NVDA. Prices and availability depend on market-data coverage.</p>
+    <div class="search-controls"><input id="stock-query" type="search" placeholder="Company name or ticker" maxlength="80" required ${pendingOrder ? 'disabled' : ''} />
+    <button type="submit" ${pendingOrder ? 'disabled' : ''}>Search</button></div>
+    </form><div id="stock-search-results" aria-live="polite"></div>`;
+}
+
+async function stockDataRequest(path) {
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (!token) throw new Error('Please sign in again to look up stocks.');
+  const response = await fetch(`${API_BASE}/${path}`, {
+    headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Stock lookup failed. Please try again.');
+  return result;
+}
+
+function attachStockSearch() {
+  const form = document.getElementById('stock-search-form');
+  const results = document.getElementById('stock-search-results');
+  const generation = searchGeneration;
+  let request = 0;
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (pendingOrder || tradeBusy || quoteBusy) return;
+    const query = document.getElementById('stock-query').value.trim();
+    if (!query) return;
+    const current = ++request;
+    results.textContent = 'Searching stocks…';
+    try {
+      const data = await stockDataRequest(`stock-search?q=${encodeURIComponent(query)}`);
+      if (generation !== searchGeneration || current !== request || tradeBusy || pendingOrder) return;
+      results.innerHTML = data.stocks.length ? `<p class="small-text">Select a result to get its latest quote. Showing up to 25 matches.</p><ul class="stock-results">${data.stocks.map(stock => `<li><button type="button" class="secondary" data-symbol="${escapeHtml(stock.ticker)}"><strong>${escapeHtml(stock.ticker)}</strong><span>${escapeHtml(stock.name)}</span></button></li>`).join('')}</ul>` : '<p class="message">No matching stocks. Try a different company name or exact ticker.</p>';
+      results.querySelectorAll('[data-symbol]').forEach(button => button.addEventListener('click', async () => {
+        if (pendingOrder || tradeBusy || quoteBusy) return;
+        const ticker = button.dataset.symbol;
+        quoteBusy = true;
+        results.textContent = `Loading quote for ${ticker}…`;
+        if (document.getElementById('trade-form')) updateTradeEstimate();
+        try {
+          const { stock } = await stockDataRequest(`stock-quote?ticker=${encodeURIComponent(ticker)}`);
+          if (generation !== searchGeneration) return;
+          dashboardState.stocks = [...dashboardState.stocks.filter(item => item.ticker !== stock.ticker), stock].sort((a, b) => a.ticker.localeCompare(b.ticker));
+          selectedTicker = stock.ticker;
+          activeStudentTab = 'trade';
+          tradeNotice = null;
+          renderStudentTabs();
+        } catch (error) {
+          if (generation === searchGeneration) results.textContent = error.message;
+        } finally {
+          if (generation === searchGeneration) {
+            quoteBusy = false;
+            if (document.getElementById('trade-form')) updateTradeEstimate();
+          }
+        }
+      }));
+    } catch (error) {
+      if (generation === searchGeneration && current === request) results.textContent = error.message;
+    }
+  });
 }
 
 function updateTradeEstimate() {
@@ -511,12 +588,12 @@ function updateTradeEstimate() {
     </dl>${warning ? `<p class="message error">${warning}</p>` : ''}
     ${pendingOrder ? '<p class="message">This ticket has an unconfirmed result. Retry it to retrieve the receipt or complete the order. The same ticket will never be filled twice.</p>' : ''}`;
   const submit = document.getElementById('trade-submit');
-  submit.disabled = tradeBusy || (!pendingOrder && (!stock || portfolio.missing || !validShares || (action === 'sell' && shares > owned)));
+  submit.disabled = tradeBusy || quoteBusy || (!pendingOrder && (!stock || portfolio.missing || !validShares || (action === 'sell' && shares > owned)));
   submit.textContent = tradeBusy ? 'Placing order…' : pendingOrder ? 'Retry this ticket' : `Place market ${action} order`;
 }
 
 async function handleTrade() {
-  if (tradeBusy) return;
+  if (tradeBusy || quoteBusy) return;
   const studentId = dashboardState.profile.id;
   const storageKey = `trade-ticket:${studentId}`;
   const order = pendingOrder || {
@@ -541,11 +618,11 @@ async function handleTrade() {
     if (!token) throw new Error('Sign in again, then retry this ticket.');
     const response = await fetch(`${API_BASE}/trade`, {
       method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify(order), signal: AbortSignal.timeout(20000),
+      body: JSON.stringify(order), signal: AbortSignal.timeout(35000),
     });
     const result = await response.json();
     if (!response.ok || !result.trade) {
-      if (result.uncertain !== true && response.status < 500) {
+      if (result.uncertain === false || (result.uncertain !== true && response.status < 500)) {
         sessionStorage.removeItem(storageKey);
         pendingOrder = null;
       }

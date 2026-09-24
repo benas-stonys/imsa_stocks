@@ -17,6 +17,12 @@ Me goofing off for now with this project
 - **Research:** classroom stock list, existing price-history charts, and research links.
 - **Accounts:** cash, holdings, portfolio value, the latest 50 trades, and the existing leaderboard.
 
+## Stock discovery
+
+Students can search company names or tickers in Trade and Research, choose a result, and load its current quote. The four starter symbols are no longer a trading whitelist. The server validates new symbols against Finnhub's U.S. stock catalog (USD-priced instruments only), requests a usable quote, and registers a new stock before executing the existing atomic trade function. Successfully registered symbols are included in Accounts valuation and the existing hourly price-refresh job. No database migration is required for this feature.
+
+Search and quote endpoints require a signed-in session. The catalog is cached for one hour per warm function instance; execution quotes are always fetched on submission. Provider rate limits, unavailable quotes, and unsupported symbols produce errors without charging the student. The existing Finnhub key is kept in Netlify environment variables. International exchanges and currency conversion are not included; instrument coverage depends on the Finnhub subscription.
+
 ## Market trade rollout
 
 1. Install dependencies with `npm ci` and run `npm test`.

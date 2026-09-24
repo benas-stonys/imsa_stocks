@@ -1,5 +1,7 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+const { resolveStock } = require('./stock-catalog');
+
 function validateOrder(body) {
   if (!body || !['buy', 'sell'].includes(body.action) ||
       typeof body.ticker !== 'string' || !/^[A-Z0-9.^-]{1,20}$/.test(body.ticker) ||
@@ -32,7 +34,7 @@ async function fetchMarketQuote(stock, { fetchImpl = fetch, env = process.env, n
       now - timestamp > 7 * 24 * 60 * 60 * 1000) {
     throw new Error('No usable market quote is available for this stock. No trade was placed.');
   }
-  return { price: data.c, asOf: new Date(timestamp).toISOString(), source: 'market' };
+  return { price: data.c, prevClose: Number(data.pc) > 0 ? Number(data.pc) : data.c, asOf: new Date(timestamp).toISOString(), source: 'market' };
 }
 
 function receipt(row) {
@@ -42,7 +44,7 @@ function receipt(row) {
     quote_as_of: row.quote_as_of, price_source: row.price_source };
 }
 
-function createHandler({ getClient, quote = fetchMarketQuote }) {
+function createHandler({ getClient, quote = fetchMarketQuote, resolve = resolveStock }) {
   return async event => {
     const reply = (statusCode, body) => ({ statusCode,
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(body) });
@@ -68,11 +70,24 @@ function createHandler({ getClient, quote = fetchMarketQuote }) {
         }
         return reply(200, { trade: receipt(existing) });
       }
-      const { data: stock, error: stockError } = await db.from('stocks').select('*').eq('ticker', order.ticker).single();
-      if (stockError || !stock) return reply(400, { error: 'This stock is not available for classroom trading.' });
+      const { data: saved, error: stockError } = await db.from('stocks').select('*').eq('ticker', order.ticker).maybeSingle();
+      if (stockError) throw new Error('Stock lookup unavailable.');
       let market;
-      try { market = await quote(stock); }
-      catch (error) { return reply(503, { error: error.name === 'TimeoutError' ? 'Market quote timed out. Please try again.' : error.message }); }
+      let stock;
+      try {
+        stock = saved || await resolve(order.ticker);
+        market = await quote(stock);
+      }
+      catch (error) { return reply(503, { error: error.name === 'TimeoutError' ? 'Market quote timed out. Please try again.' : error.message, uncertain: false }); }
+      if (!saved) {
+        // Register only provider-validated symbols with a usable quote. Concurrent
+        // registrations must never overwrite a teacher's override or newer price.
+        const { error: registerError } = await db.from('stocks').upsert([{
+          ticker: order.ticker, name: stock.name, current_price: market.price,
+          prev_close: market.prevClose || market.price, last_updated: market.asOf, is_overridden: false,
+        }], { onConflict: 'ticker', ignoreDuplicates: true });
+        if (registerError) return reply(503, { error: 'Could not prepare this stock. Please try again.', uncertain: false });
+      }
       const { data, error } = await db.rpc('execute_market_trade', {
         p_student_id: studentId, p_request_id: order.request_id, p_ticker: order.ticker,
         p_action: order.action, p_shares: order.shares, p_price: market.price,

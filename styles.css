@@ -155,6 +155,13 @@ textarea {
 button:disabled { opacity: 0.55; cursor: not-allowed; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
 .message { overflow-wrap: anywhere; }
+.stock-search { border-bottom: 1px solid var(--border); margin-bottom: 20px; padding-bottom: 16px; }
+.stock-search .small-text { margin: 8px 0 0; }
+.search-controls { display: flex; align-items: center; gap: 8px; }
+.search-controls input { min-width: 0; margin: 8px 0; }
+.stock-results { list-style: none; padding: 0; max-height: 280px; overflow-y: auto; margin: 0 0 20px; }
+.stock-results button { width: 100%; text-align: left; margin-bottom: 6px; }
+.stock-results span { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
 
 @media (max-width: 760px) {
   .grid-2 {
