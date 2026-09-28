@@ -19,17 +19,13 @@ exports.handler = async event => {
     const base = 'https://finnhub.io/api/v1/';
     const urls = {
       quote: `${base}quote?symbol=${encodeURIComponent(ticker)}&token=${encodeURIComponent(key)}`,
-      candles: `${base}stock/candle?symbol=${encodeURIComponent(ticker)}&resolution=D&from=${from}&to=${to}&token=${encodeURIComponent(key)}`,
       metric: `${base}stock/metric?symbol=${encodeURIComponent(ticker)}&metric=all&token=${encodeURIComponent(key)}`,
       profile: `${base}stock/profile2?symbol=${encodeURIComponent(ticker)}&token=${encodeURIComponent(key)}`,
     };
     const responses = await Promise.all(Object.values(urls).map(url => fetch(url, { signal: AbortSignal.timeout(12000) })));
-    const [quote, candles, metric, profile] = await Promise.all(responses.map(response => response.ok ? response.json() : {}));
+    const [quote, metric, profile] = await Promise.all(responses.map(response => response.ok ? response.json() : {}));
     if (!quote || !Number.isFinite(Number(quote.c)) || Number(quote.c) <= 0) return reply(404, { error: 'No quote is available for this symbol.' });
-    const hasCandles = candles.s === 'ok' && Array.isArray(candles.t) && candles.t.length > 0;
-    const fallbackTime = Number.isFinite(Number(quote.t)) ? Number(quote.t) : to;
-    const chartCandles = hasCandles ? candles : { s: 'ok', fallback: true, t: [fallbackTime], o: [Number(quote.o) || Number(quote.c)], h: [Number(quote.h) || Number(quote.c)], l: [Number(quote.l) || Number(quote.c)], c: [Number(quote.c)], v: [Number(quote.v) || 0] };
-    return reply(200, { ticker, quote, candles: chartCandles, metric: metric.metric || metric, profile });
+    return reply(200, { ticker, quote, metric: metric.metric || metric, profile });
   } catch (error) {
     return reply(503, { error: error.name === 'TimeoutError' ? 'Research data timed out. Please try again.' : 'Research data is temporarily unavailable.' });
   }

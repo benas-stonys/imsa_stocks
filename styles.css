@@ -182,3 +182,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   }
 }
 
+
+.chart-ranges { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.chart-options { margin:12px 0; }
+.chart-options summary { cursor:pointer; }
+.chart-wrap { overflow:hidden; }

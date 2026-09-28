@@ -504,24 +504,60 @@ function setTicketLocked(locked) {
 function renderResearchPanel() {
   return `<div class="card research-panel"><div class="research-heading"><div><p class="eyebrow">MARKET RESEARCH</p><h2 id="research-title">Research</h2></div><span id="research-status" class="small-text">Loading…</span></div>
     <div class="chart-tabs"><button type="button" class="chart-tab active" data-chart="candles">Candles</button><button type="button" class="chart-tab" data-chart="mountain">Mountain</button></div>
-    <div class="chart-wrap"><canvas id="research-chart" height="260"></canvas></div><div id="research-stats" class="stats-grid"></div></div>`;
+    <div class="chart-ranges" role="group" aria-label="Chart time range"><button type="button" data-range="1d" class="chart-tab">1 day</button><button type="button" data-range="7d" class="chart-tab">7 days</button><button type="button" data-range="1mo" class="chart-tab active">1 month</button><button type="button" data-range="6mo" class="chart-tab">6 months</button><button type="button" data-range="1y" class="chart-tab">1 year</button><button type="button" data-range="5y" class="chart-tab">5 years</button></div><details class="chart-options"><summary>Chart options</summary><label for="candle-interval">Candle interval</label><select id="candle-interval"></select><p class="small-text">Minute candles are available for recent ranges. Longer ranges use daily, weekly or monthly candles.</p></details><p id="chart-message" class="small-text" role="status"></p><div class="chart-wrap"><canvas id="research-chart" height="260"></canvas></div><div id="research-stats" class="stats-grid"></div></div>`;
 }
 
 async function loadResearchPanel(ticker) {
   const target = document.getElementById('research-panel');
   if (!target || !ticker) return;
   target.innerHTML = renderResearchPanel();
-  const request = ++researchRequest;
-  const data = await stockDataRequest(`stock-research?ticker=${encodeURIComponent(ticker)}`).catch(error => ({ error: error.message }));
-  if (request !== researchRequest || !document.getElementById('research-panel')) return;
-  if (data.error) { target.innerHTML = `<div class="card message error">${escapeHtml(data.error)}</div>`; return; }
-  document.getElementById('research-title').textContent = `${data.ticker} · ${data.profile?.name || ''}`;
-  document.getElementById('research-status').textContent = data.candles?.fallback ? 'Latest quote' : 'Ready';
-  renderResearchStats(data);
-  let mode = 'candles';
-  const draw = () => drawResearchChart(data, mode);
-  target.querySelectorAll('.chart-tab').forEach(button => button.addEventListener('click', () => { mode = button.dataset.chart; target.querySelectorAll('.chart-tab').forEach(item => item.classList.toggle('active', item === button)); draw(); }));
-  draw();
+  const generation = ++researchRequest;
+  let mode = 'candles', range = '1mo', request = 0, chartData;
+  const intervals = { '1d': ['1m','5m','15m','30m','60m'], '7d': ['1m','5m','15m','30m','60m','1d'], '1mo': ['5m','15m','30m','60m','1d'], '6mo': ['1d','1wk'], '1y': ['1d','1wk'], '5y': ['1d','1wk','1mo'] };
+  const defaults = { '1d': '5m', '7d': '30m', '1mo': '1d', '6mo': '1d', '1y': '1d', '5y': '1wk' };
+  const select = target.querySelector('#candle-interval');
+  const valid = () => generation === researchRequest && target.isConnected && target.querySelector('#candle-interval') === select;
+  const draw = () => { if (chartData && valid()) drawResearchChart(chartData, mode); };
+  const setIntervals = () => {
+    select.innerHTML = intervals[range].map(value => '<option value="' + value + '">' + ({'1d':'1 day','1wk':'1 week','1mo':'1 month'}[value] || value.replace('m',' minutes')) + '</option>').join('');
+    select.value = defaults[range];
+  };
+  const loadHistory = async () => {
+    const current = ++request;
+    chartData = null;
+    const canvas = target.querySelector('#research-chart');
+    canvas.hidden = true;
+    target.querySelector('#chart-message').textContent = 'Loading historical prices…';
+    try {
+      const result = await stockDataRequest('stock-history?ticker=' + encodeURIComponent(ticker) + '&range=' + range + '&interval=' + select.value);
+      if (!valid() || current !== request) return;
+      chartData = result;
+      canvas.hidden = false;
+      target.querySelector('#chart-message').textContent = result.candles.source + ' · ' + result.candles.t.length + ' candles · Regular trading hours · Prices may be delayed';
+      draw();
+    } catch (error) {
+      if (valid() && current === request) target.querySelector('#chart-message').textContent = error.message;
+    }
+  };
+  target.querySelectorAll('[data-chart]').forEach(button => button.addEventListener('click', () => {
+    mode = button.dataset.chart;
+    target.querySelectorAll('[data-chart]').forEach(item => item.classList.toggle('active', item === button)); draw();
+  }));
+  target.querySelectorAll('[data-range]').forEach(button => button.addEventListener('click', () => {
+    range = button.dataset.range;
+    target.querySelectorAll('[data-range]').forEach(item => item.classList.toggle('active', item === button));
+    setIntervals(); loadHistory();
+  }));
+  select.addEventListener('change', loadHistory);
+  setIntervals();
+  loadHistory();
+  if (window.researchResize) window.researchResize.disconnect();
+  if (window.ResizeObserver) { window.researchResize = new ResizeObserver(draw); window.researchResize.observe(target.querySelector('.chart-wrap')); }
+  const data = await stockDataRequest('stock-research?ticker=' + encodeURIComponent(ticker)).catch(error => ({ error: error.message }));
+  if (!valid()) return;
+  target.querySelector('#research-title').textContent = ticker + (data.profile?.name ? ' · ' + data.profile.name : '');
+  target.querySelector('#research-status').textContent = data.error ? 'Quote unavailable' : 'Latest quote';
+  if (!data.error) renderResearchStats(data);
 }
 
 function renderResearchStats(data) {
@@ -543,7 +579,7 @@ function drawResearchChart(data, mode) {
   const min = Math.min(...values); const max = Math.max(...values); const spread = Math.max(max - min, max * 0.01, 0.01); const yMin = min - spread * 0.08; const yMax = max + spread * 0.08;
   const x = index => padding.left + (points.length === 1 ? plotWidth / 2 : index * plotWidth / (points.length - 1)); const y = value => padding.top + (yMax - value) * plotHeight / (yMax - yMin);
   context.strokeStyle = '#dbe3ef'; context.lineWidth = 1; context.fillStyle = '#64748b'; context.font = '11px system-ui';
-  for (let tick = 0; tick <= 4; tick += 1) { const value = yMin + (yMax - yMin) * tick / 4; const yy = y(value); context.beginPath(); context.moveTo(padding.left, yy); context.lineTo(width - padding.right, yy); context.stroke(); context.fillText(formatPrice(value), 4, yy + 4); }
+  for (let tick = 0; tick <= 4; tick += 1) { const value = yMin + (yMax - yMin) * tick / 4; const yy = y(value); context.beginPath(); context.moveTo(padding.left, yy); context.lineTo(width - padding.right, yy); context.stroke(); context.fillText(formatCurrency(value), 4, yy + 4); }
   if (mode === 'mountain') {
     const rising = points.at(-1).close >= points[0].close; const color = rising ? '#16a34a' : '#dc2626'; const gradient = context.createLinearGradient(0, padding.top, 0, height - padding.bottom); gradient.addColorStop(0, rising ? 'rgba(22,163,74,.28)' : 'rgba(220,38,38,.28)'); gradient.addColorStop(1, 'rgba(255,255,255,0)');
     context.beginPath(); points.forEach((point, index) => index ? context.lineTo(x(index), y(point.close)) : context.moveTo(x(index), y(point.close))); context.lineTo(x(points.length - 1), height - padding.bottom); context.lineTo(x(0), height - padding.bottom); context.closePath(); context.fillStyle = gradient; context.fill();
@@ -552,7 +588,7 @@ function drawResearchChart(data, mode) {
     const candleWidth = Math.max(2, Math.min(12, plotWidth / Math.max(points.length, 1) * 0.65));
     points.forEach((point, index) => { const open = Number.isFinite(point.open) ? point.open : point.close; const high = Number.isFinite(point.high) ? point.high : Math.max(open, point.close); const low = Number.isFinite(point.low) ? point.low : Math.min(open, point.close); const rising = point.close >= open; const color = rising ? '#16a34a' : '#dc2626'; context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 1; context.beginPath(); context.moveTo(x(index), y(high)); context.lineTo(x(index), y(low)); context.stroke(); const top = y(Math.max(open, point.close)); const bottom = y(Math.min(open, point.close)); context.fillRect(x(index) - candleWidth / 2, top, candleWidth, Math.max(1, bottom - top)); });
   }
-  context.fillStyle = '#64748b'; context.font = '11px system-ui'; [0, Math.floor(points.length / 2), points.length - 1].filter((index, position, list) => list.indexOf(index) === position).forEach(index => context.fillText(new Date(points[index].time * 1000).toLocaleDateString(), Math.max(padding.left, x(index) - 28), height - 10));
+  context.fillStyle = '#64748b'; context.font = '11px system-ui'; [0, Math.floor(points.length / 2), points.length - 1].filter((index, position, list) => list.indexOf(index) === position).forEach(index => context.fillText(new Date(points[index].time * 1000).toLocaleString('en-US', { timeZone: c.timezone || 'America/New_York', month: 'short', day: 'numeric', ...(c.range === '1d' ? { hour: 'numeric', minute: '2-digit' } : { year: '2-digit' }) }), Math.max(padding.left, x(index) - 28), height - 10));
 }
 
 function chartOptions() { return { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } } }; }
