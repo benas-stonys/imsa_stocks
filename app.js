@@ -134,11 +134,11 @@ async function renderDashboard(profile, user) {
   }
 
   app.innerHTML = `
-    <div class="card">
+    <div class="card profile-banner">
       <div class="grid grid-2">
         <div>
-          <h1>Welcome, ${escapeHtml(profile.username)}</h1>
-          <p class="small-text">Role: ${profile.role}</p>
+          <div class="profile-identity"><span class="avatar">${escapeHtml(profile.username.slice(0,2).toUpperCase())}</span><div><p class="banner-kicker">IMSA • CLASSROOM INVESTING</p><h1>${escapeHtml(profile.username)}</h1></div></div>
+          <span class="role-badge">${profile.role === "admin" ? "Administrator" : "Student investor"}</span>
         </div>
         <div style="text-align:right; align-self:center;">
           <button id="logout-button" class="secondary">Log out</button>
@@ -159,6 +159,7 @@ async function renderDashboard(profile, user) {
   if (profile.role === 'admin') {
     document.getElementById('dashboard-body').innerHTML = renderAdminPanel(profile, stocks, leaderboard);
     attachAdminListeners();
+    attachAuditLog();
   } else {
     renderStudentTabs();
   }
@@ -330,6 +331,8 @@ function attachAdminListeners() {
 
 function renderAdminPanel(profile, stocks, leaderboard) {
   return `
+    <nav class="tabs admin-nav" aria-label="Administration"><a href="#audit-log">Audit logs</a><a href="#student-form">Add student</a><a href="#price-override-form">Manage stocks</a></nav>
+    <section id="audit-log" class="card"><p class="eyebrow">CLASSROOM ACTIVITY</p><h2>Student audit logs</h2><p class="small-text">Completed buys and sells are recorded automatically for every student. New students appear in the filter as soon as their account is created.</p><div class="audit-controls"><label for="audit-student">Student</label><select id="audit-student"><option value="">All students</option></select><button type="button" id="audit-refresh" class="secondary">Refresh</button></div><div id="audit-results" aria-live="polite">Loading transactions…</div><div class="audit-pagination"><button id="audit-prev" class="secondary" disabled>Previous</button><span id="audit-page"></span><button id="audit-next" class="secondary" disabled>Next</button></div></section>
     <div class="grid grid-2">
       <div class="card">
         <h2>Admin dashboard</h2>
@@ -905,3 +908,32 @@ window.openStockModal = function (ticker) {
 window.closeStockModal = function () {
   document.getElementById('stock-modal').classList.add('hidden');
 };
+
+function attachAuditLog() {
+  let page = 0, generation = 0;
+  const filter = document.getElementById('audit-student');
+  const results = document.getElementById('audit-results');
+  const load = async () => {
+    const request = ++generation;
+    results.textContent = 'Loading transactions…';
+    document.getElementById('audit-prev').disabled = true;
+    document.getElementById('audit-next').disabled = true;
+    try {
+      const data = await stockDataRequest('student-audit?student=' + encodeURIComponent(filter.value) + '&page=' + page);
+      if (request !== generation || !results.isConnected) return;
+      const selected = filter.value;
+      filter.innerHTML = '<option value="">All students</option>' + data.students.map(student => '<option value="' + escapeHtml(student.id) + '">' + escapeHtml(student.username) + '</option>').join('');
+      filter.value = selected;
+      const names = Object.fromEntries(data.students.map(student => [student.id, student.username]));
+      results.innerHTML = data.rows.length ? '<div class="table-scroll"><table class="table"><thead><tr><th>Time</th><th>Student</th><th>Action</th><th>Stock</th><th>Shares</th><th>Fill price</th><th>Total</th><th>Cash after</th><th>Price source</th></tr></thead><tbody>' + data.rows.map(row => '<tr><td>' + escapeHtml(formatDate(row.timestamp)) + '</td><td>' + escapeHtml(names[row.student_id] || row.student_id) + '</td><td><span class="trade-badge ' + (row.action === 'buy' ? 'buy' : 'sell') + '">' + (row.action === 'buy' ? 'BUY' : 'SELL') + '</span></td><td>' + escapeHtml(row.ticker) + '</td><td>' + Number(row.shares) + '</td><td>' + formatPrice(row.price) + '</td><td>' + formatCurrency(row.total_amount ?? row.price * row.shares) + '</td><td>' + (row.cash_after == null ? '—' : formatCurrency(row.cash_after)) + '</td><td>' + escapeHtml(row.price_source || 'Legacy') + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="audit-empty">No trades yet. Completed buys and sells will appear here.</p>';
+      document.getElementById('audit-page').textContent = data.count + ' transactions · Page ' + (page + 1);
+      document.getElementById('audit-prev').disabled = page === 0;
+      document.getElementById('audit-next').disabled = (page + 1) * 50 >= data.count;
+    } catch (error) { if (request === generation && results.isConnected) results.textContent = error.message; }
+  };
+  filter.addEventListener('change', () => { page = 0; load(); });
+  document.getElementById('audit-refresh').addEventListener('click', () => { page = 0; load(); });
+  document.getElementById('audit-prev').addEventListener('click', () => { page--; load(); });
+  document.getElementById('audit-next').addEventListener('click', () => { page++; load(); });
+  load();
+}
