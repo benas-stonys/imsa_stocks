@@ -376,9 +376,7 @@ function renderAdminPanel(profile, stocks, leaderboard) {
       <h3>Override stock price</h3>
       <form id="price-override-form">
         <label>Symbol</label>
-        <select name="ticker" required>
-          ${stocks.map(stock => `<option value="${stock.ticker}">${stock.ticker}</option>`).join('')}
-        </select>
+        <input name="ticker" type="text" placeholder="e.g. NVDA" maxlength="20" list="override-symbols" required /><datalist id="override-symbols">${stocks.map(stock => `<option value="${escapeHtml(stock.ticker)}">${escapeHtml(stock.name)}</option>`).join('')}</datalist><p class="small-text">Enter any supported U.S. stock ticker, including stocks not yet used in class. The override stays fixed until you change it.</p>
         <label>Override price</label>
         <input name="price" type="number" step="0.01" min="0.01" required />
         <button type="submit">Set override</button>
@@ -788,20 +786,19 @@ async function handleAddTicker() {
 async function handleOverridePrice() {
   const form = document.getElementById('price-override-form');
   const data = new FormData(form);
-  const ticker = data.get('ticker');
-  const price = Number(data.get('price'));
-
-  if (price <= 0) {
-    return alert('Price must be positive.');
-  }
-
-  const { error } = await supabase.from('stocks').update({ current_price: price, is_overridden: true, last_updated: new Date().toISOString() }).eq('ticker', ticker);
-  if (error) {
-    return alert(error.message);
-  }
-
-  alert('Price overridden.');
-  start();
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const session = await supabase.auth.getSession();
+    const token = session.data?.session?.access_token;
+    if (!token) throw new Error('Please sign in again.');
+    const response = await fetch(API_BASE + '/override-stock', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify({ ticker: String(data.get('ticker')).trim().toUpperCase(), price: Number(data.get('price')) }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Override failed.');
+    alert(result.ticker + ' classroom price set to ' + formatPrice(result.price));
+    start();
+  } catch (error) { alert(error.message); }
+  finally { button.disabled = false; }
 }
 
 async function handleRefreshPrices() {
