@@ -5,6 +5,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const app = document.getElementById('app');
 
 let dashboardState = { profile: null, stocks: [], leaderboard: [], portfolio: null };
+let demoMode = false;
 let activeStudentTab = 'trade';
 let tradeBusy = false;
 let tradeNotice = null;
@@ -20,12 +21,29 @@ const resourceLinks = [
   // add your own favorites here
 ];
 
+let recoveringPassword = new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery';
+let recoveryLinkError = new URLSearchParams(window.location.hash.slice(1)).has('error');
+let recoveryListenerAttached = false;
 window.addEventListener('DOMContentLoaded', start);
 
 async function start() {
+  if (demoMode) return;
+  if (!recoveryListenerAttached) {
+    recoveryListenerAttached = true;
+    supabase.auth.onAuthStateChange(event => {
+      if (event === 'PASSWORD_RECOVERY') { recoveringPassword = true; setTimeout(start, 0); }
+    });
+  }
   renderLoading('Checking session...');
   const { data: sessionData } = await supabase.auth.getSession();
   const session = sessionData?.session;
+  if (recoveryLinkError) { recoveryLinkError = false; window.history.replaceState(null, '', window.location.pathname); return renderRecoveryRequest('This recovery link is invalid or expired. Request a new link.'); }
+  if (recoveringPassword) {
+    if (!session) return renderRecoveryRequest('Your recovery link has expired. Request a new link.');
+    app.innerHTML = passwordForm(true);
+    attachPasswordForm(true);
+    return;
+  }
 
   if (!session) {
     return renderAuth();
@@ -36,7 +54,7 @@ async function start() {
     return renderAuth('No profile found. Please ask an admin to create your account.');
   }
 
-  renderDashboard(profile, session.user);
+  if (!recoveringPassword) renderDashboard(profile, session.user);
 }
 
 function renderLoading(message) {
@@ -51,18 +69,21 @@ async function renderAuth(message = '') {
     <div class="card">
       <h1>Classroom Trading Simulator</h1>
       <p>Sign in with your classroom account.</p>
-      ${message ? `<div class="message error">${message}</div>` : ''}
+      ${message ? `<div class="message error">${escapeHtml(message)}</div>` : ''}
       <form id="login-form">
         <label>Email</label>
         <input name="email" type="email" required />
         <label>Password</label>
         <input name="password" type="password" required />
         <button type="submit">Sign in</button>
+        <button type="button" id="forgot-password" class="secondary">Forgot password?</button><button type="button" id="try-demo" class="secondary">Try demo — no account needed</button>
       </form>
     </div>
     ${needAdmin ? adminSetupCard() : ''}
   `;
 
+  document.getElementById('try-demo').addEventListener('click', startDemo);
+  document.getElementById('forgot-password').addEventListener('click', () => renderRecoveryRequest());
   document.getElementById('login-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = new FormData(event.target);
@@ -133,6 +154,7 @@ async function renderDashboard(profile, user) {
     catch { pendingOrder = null; }
   }
 
+  if (recoveringPassword) return;
   app.innerHTML = `
     <div class="card profile-banner">
       <div class="grid grid-2">
@@ -206,7 +228,8 @@ function renderStudentTabs() {
       await handleTrade();
     });
   } else if (activeStudentTab === 'accounts') {
-    content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard);
+    content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard) + (demoMode ? '' : passwordForm(false));
+    if (!demoMode) attachPasswordForm(false);
   } else {
     content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section><section id="research-panel"></section>` + renderMarketTable(stocks) + renderResourcesTab();
     attachStockSearch();
@@ -332,7 +355,7 @@ function attachAdminListeners() {
 function renderAdminPanel(profile, stocks, leaderboard) {
   return `
     <nav class="tabs admin-nav" aria-label="Administration"><a href="#audit-log">Audit logs</a><a href="#student-form">Add student</a><a href="#price-override-form">Manage stocks</a></nav>
-    <section id="audit-log" class="card"><p class="eyebrow">CLASSROOM ACTIVITY</p><h2>Student audit logs</h2><p class="small-text">Completed buys and sells are recorded automatically for every student. New students appear in the filter as soon as their account is created.</p><div class="audit-controls"><label for="audit-student">Student</label><select id="audit-student"><option value="">All students</option></select><button type="button" id="audit-refresh" class="secondary">Refresh</button></div><div id="audit-results" aria-live="polite">Loading transactions…</div><div class="audit-pagination"><button id="audit-prev" class="secondary" disabled>Previous</button><span id="audit-page"></span><button id="audit-next" class="secondary" disabled>Next</button></div></section>
+    <section id="audit-log" class="card"><p class="eyebrow">CLASSROOM ACTIVITY</p><h2>Student audit logs</h2><p class="small-text">Completed buys and sells are recorded automatically for every student. New students appear in the filter as soon as their account is created.</p><div class="audit-controls"><label for="audit-student">Student</label><select id="audit-student"><option value="">All students</option></select><button type="button" id="audit-refresh" class="secondary">Refresh</button><button type="button" id="audit-export" class="secondary">Export CSV</button></div><div id="audit-results" aria-live="polite">Loading transactions…</div><div class="audit-pagination"><button id="audit-prev" class="secondary" disabled>Previous</button><span id="audit-page"></span><button id="audit-next" class="secondary" disabled>Next</button></div></section>
     <div class="grid grid-2">
       <div class="card">
         <h2>Admin dashboard</h2>
@@ -599,13 +622,14 @@ function formatLargeNumber(value) { return Number.isFinite(Number(value)) ? `${f
 function renderStockSearch() {
   return `<form id="stock-search-form" class="stock-search">
     <label for="stock-query">Find any supported U.S. stock</label>
-    <p class="small-text">Search a company name or ticker, such as Nvidia or NVDA. Prices and availability depend on market-data coverage.</p>
+    <p class="small-text">${demoMode ? "Demo stocks: AAPL, MSFT, NVDA, AMZN and TSLA. All prices are illustrative." : "Search a company name or ticker, such as Nvidia or NVDA. Prices and availability depend on market-data coverage."}</p>
     <div class="search-controls"><input id="stock-query" type="search" placeholder="Company name or ticker" maxlength="80" required ${pendingOrder ? 'disabled' : ''} />
     <button type="submit" ${pendingOrder ? 'disabled' : ''}>Search</button></div>
     </form><div id="stock-search-results" aria-live="polite"></div>`;
 }
 
 async function stockDataRequest(path) {
+  if (demoMode) return demoStockData(path);
   const { data } = await supabase.auth.getSession();
   const token = data?.session?.access_token;
   if (!token) throw new Error('Please sign in again to look up stocks.');
@@ -691,6 +715,7 @@ function updateTradeEstimate() {
 }
 
 async function handleTrade() {
+  if (demoMode) return handleDemoTrade();
   if (tradeBusy || quoteBusy) return;
   const studentId = dashboardState.profile.id;
   const storageKey = `trade-ticket:${studentId}`;
@@ -847,6 +872,7 @@ function formatCurrency(value) {
 let modalChartInstance = null;
 
 async function loadPriceChart(ticker, canvasId = 'priceChart') {
+  if (demoMode) { closeStockModal(); selectedTicker = ticker; activeStudentTab = 'trade'; renderStudentTabs(); return; }
   const { data, error } = await supabase
     .from('price_history')
     .select('price, recorded_at')
@@ -928,9 +954,141 @@ function attachAuditLog() {
       document.getElementById('audit-next').disabled = (page + 1) * 50 >= data.count;
     } catch (error) { if (request === generation && results.isConnected) results.textContent = error.message; }
   };
+  document.getElementById('audit-export').addEventListener('click', () => exportAudit(filter.value));
   filter.addEventListener('change', () => { page = 0; load(); });
   document.getElementById('audit-refresh').addEventListener('click', () => { page = 0; load(); });
   document.getElementById('audit-prev').addEventListener('click', () => { page--; load(); });
   document.getElementById('audit-next').addEventListener('click', () => { page++; load(); });
   load();
+}
+
+function renderRecoveryRequest(message = '') {
+  app.innerHTML = '<section class="card"><h1>Recover your account</h1><p>Enter the email your teacher used when creating your account.</p><form id="recovery-form"><label for="recovery-email">Email</label><input id="recovery-email" type="email" autocomplete="email" required><button type="submit">Send recovery link</button><button type="button" id="recovery-back" class="secondary">Back to sign in</button><p id="recovery-status" role="status"></p></form></section>';
+  document.getElementById('recovery-status').textContent = message;
+  document.getElementById('recovery-back').addEventListener('click', () => { recoveringPassword = false; renderAuth(); });
+  document.getElementById('recovery-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget, button = form.querySelector('[type="submit"]'), status = form.querySelector('#recovery-status');
+    button.disabled = true;
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(form.querySelector('input').value.trim(), { redirectTo: window.location.origin + '/' });
+      if (error) throw new Error('Recovery email could not be sent. Try again later or contact your teacher.');
+      status.textContent = 'If this email belongs to an account, a recovery link has been sent. Check your inbox and spam folder.';
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+}
+function passwordForm(recovery) {
+  return '<section class="card"><h2>' + (recovery ? 'Set a new password' : 'Change password') + '</h2><form id="password-form">' + (recovery ? '' : '<label for="current-password">Current password</label><input id="current-password" type="password" autocomplete="current-password" required>') + '<label for="new-password">New password</label><input id="new-password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><label for="confirm-password">Confirm new password</label><input id="confirm-password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required><p class="small-text">Use at least 8 characters. Your teacher cannot see your password.</p><button type="submit">Save new password</button><p id="password-status" role="status"></p></form></section>';
+}
+function attachPasswordForm(recovery) {
+  document.getElementById('password-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget, status = form.querySelector('#password-status'), button = form.querySelector('button');
+    const password = form.querySelector('#new-password').value;
+    if (password.length < 8 || password.length > 128) { status.textContent = 'Use between 8 and 128 characters.'; return; }
+    if (password !== form.querySelector('#confirm-password').value) { status.textContent = 'The new passwords do not match.'; return; }
+    button.disabled = true;
+    try {
+      if (!recovery) {
+        const { data, error: userError } = await supabase.auth.getUser();
+        if (userError || !data?.user?.email) throw new Error('Please sign in again.');
+        const { error } = await supabase.auth.signInWithPassword({ email: data.user.email, password: form.querySelector('#current-password').value });
+        if (error) throw new Error('Current password is incorrect.');
+      }
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw new Error(error.message);
+      form.reset();
+      recoveringPassword = false;
+      if (recovery) {
+        window.history.replaceState(null, '', window.location.pathname);
+        await supabase.auth.signOut({ scope: 'local' });
+        await renderAuth('Password updated. Sign in with your new password.');
+      } else status.textContent = 'Password updated successfully.';
+    } catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+}
+function csvCell(value) {
+  let text = String(value ?? '');
+  if (/^[\s]*[=+@-]/.test(text)) text = "'" + text;
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+async function exportAudit(student) {
+  const button = document.getElementById('audit-export');
+  button.disabled = true; button.textContent = 'Exporting…';
+  try {
+    const rows = [], names = {}; let page = 0;
+    const before = new Date().toISOString();
+    while (true) {
+      const data = await stockDataRequest('student-audit?student=' + encodeURIComponent(student) + '&page=' + page + '&before=' + encodeURIComponent(before));
+      data.students.forEach(item => { names[item.id] = item.username; });
+      rows.push(...data.rows);
+      if (data.rows.length < 50 || rows.length >= data.count) break;
+      page++;
+    }
+    const unique = [...new Map(rows.map(row => [row.id, row])).values()];
+    const records = [['Transaction ID','Time (UTC)','Student ID','Student','Action','Stock','Shares','Fill price (USD)','Total (USD)','Cash after (USD)','Price source'], ...unique.map(row => [row.id,row.timestamp,row.student_id,names[row.student_id] || '',row.action,row.ticker,row.shares,row.price,row.total_amount ?? row.price*row.shares,row.cash_after,row.price_source])];
+    const blob = new Blob(['\uFEFF' + records.map(row => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = 'student-audit-' + new Date().toISOString().slice(0,10) + '.csv'; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { alert('Export failed: ' + error.message); }
+  finally { button.disabled = false; button.textContent = 'Export CSV'; }
+}
+
+function startDemo() {
+  demoMode = true; tradeBusy = false; quoteBusy = false; pendingOrder = null; tradeNotice = null; selectedTicker = 'AAPL'; activeStudentTab = 'trade';
+  const stocks = [['AAPL','Apple',180],['MSFT','Microsoft',420],['NVDA','Nvidia',120],['AMZN','Amazon',190],['TSLA','Tesla',250]].map(([ticker,name,current_price]) => ({ticker,name,current_price,last_updated:new Date().toISOString(),is_overridden:false}));
+  dashboardState = { profile: {id:'demo',username:'Demo investor',role:'student',starting_cash:10000}, stocks, portfolio:{cash:10000,holdings:{}},history:{rows:[]},leaderboard:[] };
+  app.innerHTML = '<section class="card profile-banner"><h1>Try classroom investing</h1><p>Demo sandbox · $10,000 practice cash · Sample prices, not live market data</p><p>Nothing is saved. Logging out, refreshing, or closing this page resets the demo.</p><button id="demo-exit" class="secondary">Log out of demo</button></section><div id="dashboard-body"></div>';
+  document.getElementById('demo-exit').addEventListener('click', exitDemo);
+  renderStudentTabs();
+}
+function exitDemo() {
+  demoMode = false; researchRequest++; searchGeneration++;
+  window.researchResize?.disconnect();
+  dashboardState = {profile:null,stocks:[],portfolio:null,history:{rows:[]},leaderboard:[]};
+  selectedTicker = ''; tradeNotice = null; pendingOrder = null;
+  renderAuth();
+}
+function handleDemoTrade() {
+  const ticker = document.getElementById('trade-ticker').value;
+  const action = document.getElementById('trade-action').value;
+  const shares = Number(document.getElementById('trade-shares').value);
+  const stock = dashboardState.stocks.find(row => row.ticker === ticker);
+  const account = dashboardState.portfolio;
+  const total = Math.round((stock?.current_price || 0) * shares * 100) / 100;
+  if (!stock || !['buy','sell'].includes(action) || !Number.isSafeInteger(shares) || shares < 1 || shares > 2147483647) return;
+  if (action === 'buy' && total > account.cash) tradeNotice = {error:true,text:'Not enough practice cash.'};
+  else if (action === 'sell' && shares > (account.holdings[ticker] || 0)) tradeNotice = {error:true,text:'Not enough shares to sell.'};
+  else {
+    account.cash = Math.round((account.cash + (action === 'buy' ? -total : total))*100)/100;
+    account.holdings[ticker] = (account.holdings[ticker] || 0) + (action === 'buy' ? shares : -shares);
+    if (!account.holdings[ticker]) delete account.holdings[ticker];
+    dashboardState.history.rows.unshift({ticker,action,shares,price:stock.current_price,total_amount:total,timestamp:new Date().toISOString()});
+    tradeNotice = {text:(action === 'buy' ? 'Bought ' : 'Sold ') + shares + ' ' + ticker + ' for ' + formatCurrency(total) + ' in the demo. This trade is not saved.'};
+  }
+  renderStudentTabs();
+}
+function demoStockData(path) {
+  const url = new URL(path, 'https://demo.invalid/');
+  const ticker = url.searchParams.get('ticker');
+  const stock = dashboardState.stocks.find(row => row.ticker === ticker);
+  if (url.pathname.endsWith('stock-search')) {
+    const q = (url.searchParams.get('q') || '').toUpperCase();
+    return {stocks:dashboardState.stocks.filter(row => (row.ticker + ' ' + row.name).toUpperCase().includes(q))};
+  }
+  if (!stock) throw new Error('Choose AAPL, MSFT, NVDA, AMZN or TSLA in this demo.');
+  if (url.pathname.endsWith('stock-quote')) return {stock};
+  if (url.pathname.endsWith('stock-research')) return {ticker,quote:{c:stock.current_price,o:stock.current_price*.99,h:stock.current_price*1.01,l:stock.current_price*.98,dp:1},metric:{},profile:{name:stock.name,exchange:'Demo sample'}};
+  if (url.pathname.endsWith('stock-history')) {
+    const range=url.searchParams.get('range') || '1mo', interval=url.searchParams.get('interval') || '1d';
+    const days={'1d':1,'7d':7,'1mo':30,'6mo':180,'1y':365,'5y':1825}[range];
+    const step=({'1d':86400,'1wk':604800,'1mo':2592000}[interval] || parseInt(interval)*60);
+    const count=Math.min(500,Math.max(2,Math.floor(days*86400/step)));
+    const c={t:[],o:[],h:[],l:[],c:[],v:[],range,interval,source:'DEMO — generated sample data',timezone:'America/New_York'};
+    for(let i=0;i<count;i++) {const p=stock.current_price*(.94+.06*i/count+.02*Math.sin(i*.3));c.t.push(Math.floor(Date.now()/1000)-(count-1-i)*step);c.o.push(p*.998);c.h.push(p*1.006);c.l.push(p*.994);c.c.push(p);c.v.push(1000);}
+    return {ticker,candles:c};
+  }
+  throw new Error('This feature needs a real account.');
 }

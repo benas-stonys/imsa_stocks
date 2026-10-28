@@ -11,10 +11,14 @@ function createAuditHandler(getClient) {
       if (user.error || !user.data?.user) return reply(401, { error: 'Please sign in again.' });
       const profile = await db.from('profiles').select('role').eq('id', user.data.user.id).single();
       if (profile.error || profile.data?.role !== 'admin') return reply(403, { error: 'Administrator access required.' });
-      const { student = '', page = '0' } = event.queryStringParameters || {};
+      const { student = '', page = '0', before = '' } = event.queryStringParameters || {};
       if ((student && !/^[0-9a-f-]{36}$/i.test(student)) || !/^\d{1,6}$/.test(page)) return reply(400, { error: 'Invalid filter.' });
       const students = await db.from('profiles').select('id,username').eq('role','student').order('username');
       let query = db.from('transactions').select('id,student_id,ticker,action,shares,price,total_amount,cash_after,timestamp,price_source', { count: 'exact' });
+      if (before) {
+        if (!Number.isFinite(Date.parse(before))) return reply(400, { error: 'Invalid date.' });
+        query = query.lte('timestamp', new Date(before).toISOString());
+      }
       if (student) query = query.eq('student_id', student);
       const result = await query.order('timestamp', { ascending: false }).order('id', { ascending: false }).range(Number(page)*50, Number(page)*50+49);
       if (students.error || result.error) throw new Error('Query failed');
