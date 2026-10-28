@@ -201,9 +201,17 @@ function renderStudentTabs() {
   `;
 
   body.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       if (tradeBusy) return;
       activeStudentTab = btn.dataset.tab;
+      if (activeStudentTab === 'accounts' && !demoMode) {
+        btn.disabled = true;
+        try {
+          const stocks = await loadStocks();
+          const [portfolio, leaderboard, history] = await Promise.all([loadStudentPortfolio(profile.id), loadLeaderboard(stocks), loadTradeHistory(profile.id)]);
+          dashboardState = {...dashboardState, stocks, portfolio, leaderboard, history};
+        } finally { btn.disabled = false; }
+      }
       renderStudentTabs();
     });
   });
@@ -468,7 +476,7 @@ function calculatePortfolioValue(portfolio, stocks) {
     const stock = stocks.find(item => item.ticker === ticker);
     return total + (stock?.current_price || 0) * shares;
   }, 0);
-  return portfolio.cash + holdingsValue;
+  return Math.round((Number(portfolio.cash) + holdingsValue) * 100) / 100;
 }
 
 async function loadLeaderboard(stocks) {
@@ -485,7 +493,7 @@ async function loadLeaderboard(stocks) {
       starting_cash: Number(profile.starting_cash),
       value,
       gain,
-      gainLabel: `${gain >= 0 ? '+' : ''}${((gain / profile.starting_cash) * 100).toFixed(1)}%`,
+      gainLabel: Number(profile.starting_cash) > 0 ? `${gain >= 0 ? '+' : ''}${((gain / profile.starting_cash) * 100).toFixed(1)}%` : "—",
     };
   }));
 
@@ -517,6 +525,7 @@ function renderTradeHistory(history) {
 }
 
 function formatPrice(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value);
 }
 
@@ -1040,7 +1049,7 @@ function startDemo() {
   demoMode = true; tradeBusy = false; quoteBusy = false; pendingOrder = null; tradeNotice = null; selectedTicker = 'AAPL'; activeStudentTab = 'trade';
   const stocks = [['AAPL','Apple',180],['MSFT','Microsoft',420],['NVDA','Nvidia',120],['AMZN','Amazon',190],['TSLA','Tesla',250]].map(([ticker,name,current_price]) => ({ticker,name,current_price,last_updated:new Date().toISOString(),is_overridden:false}));
   dashboardState = { profile: {id:'demo',username:'Demo investor',role:'student',starting_cash:10000}, stocks, portfolio:{cash:10000,holdings:{}},history:{rows:[]},leaderboard:[] };
-  app.innerHTML = '<section class="card profile-banner"><h1>Try classroom investing</h1><p>Demo sandbox · $10,000 practice cash · Sample prices, not live market data</p><p>Nothing is saved. Logging out, refreshing, or closing this page resets the demo.</p><button id="demo-exit" class="secondary">Log out of demo</button></section><div id="dashboard-body"></div>';
+  app.innerHTML = '<section class="card profile-banner"><h1>Try classroom investing</h1><p>Demo sandbox · $10,000 practice cash · Sample prices, not live market data</p><p>Live data available when logged in.</p><button id="demo-exit" class="secondary">Log out of demo</button></section><div id="dashboard-body"></div>';
   document.getElementById('demo-exit').addEventListener('click', exitDemo);
   renderStudentTabs();
 }
