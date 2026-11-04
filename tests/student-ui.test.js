@@ -18,6 +18,11 @@ function setup() {
       portfolio: { cash: 1000, holdings: { AAPL: 3 } }, leaderboard: [], history: { rows: [] }
     };
     window.runTrade = handleTrade;
+    loadResearchPanel = async () => {};
+    loadStocks = async () => dashboardState.stocks;
+    loadStudentPortfolio = async () => dashboardState.portfolio;
+    loadTradeHistory = async () => dashboardState.history;
+    loadLeaderboard = async () => [];
     window.renderTabs = renderStudentTabs;
     window.markMissing = () => { dashboardState.portfolio.missing = true; renderStudentTabs(); };
     window.prepareSuccess = () => {
@@ -31,7 +36,7 @@ function setup() {
   return { dom, win, doc: win.document };
 }
 
-test('student navigation separates ticket, research and accounts, with accurate order estimates', () => {
+test('student navigation separates ticket, research and accounts, with accurate order estimates', async () => {
   const { dom, win, doc } = setup();
   assert.match(doc.body.textContent, /Trade ticket/);
   doc.getElementById('trade-shares').value = '2';
@@ -46,6 +51,7 @@ test('student navigation separates ticket, research and accounts, with accurate 
   assert.match(doc.body.textContent, /Research/);
   assert.ok(doc.querySelector('button[data-ticker="AAPL"]'));
   doc.querySelector('[data-tab="accounts"]').click();
+  await new Promise(resolve => setImmediate(resolve));
   assert.match(doc.body.textContent, /Trade history/);
   assert.match(doc.body.textContent, /\$1,300\.00/);
   dom.window.close();
@@ -103,6 +109,7 @@ test('successful orders show a receipt and refresh Accounts holdings and history
   assert.match(doc.getElementById('trade-message').textContent, /\$900\.00/);
   assert.equal(win.sessionStorage.getItem('trade-ticket:student'), null);
   doc.querySelector('[data-tab="accounts"]').click();
+  await new Promise(resolve => setImmediate(resolve));
   assert.match(doc.body.textContent, /Trade history/);
   assert.match(doc.body.textContent, /\$900\.00/);
   assert.match(doc.body.textContent, /\$400\.00/);

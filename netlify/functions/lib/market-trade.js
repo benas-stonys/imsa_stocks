@@ -9,7 +9,8 @@ function validateOrder(body) {
       !UUID.test(body.request_id || '')) {
     throw new Error('Choose a stock, buy or sell, and a positive whole number of shares.');
   }
-  return { ticker: body.ticker, action: body.action, shares: body.shares, request_id: body.request_id };
+  if (body.rationale !== undefined && (typeof body.rationale !== 'string' || body.rationale.length > 2000)) throw new Error('Trade rationale must be at most 2,000 characters.');
+  return { ticker: body.ticker, action: body.action, shares: body.shares, request_id: body.request_id, rationale: body.rationale || '' };
 }
 
 async function fetchMarketQuote(stock, { fetchImpl = fetch, env = process.env, now = Date.now() } = {}) {
@@ -88,10 +89,11 @@ function createHandler({ getClient, quote = fetchMarketQuote, resolve = resolveS
         }], { onConflict: 'ticker', ignoreDuplicates: true });
         if (registerError) return reply(503, { error: 'Could not prepare this stock. Please try again.', uncertain: false });
       }
-      const { data, error } = await db.rpc('execute_market_trade', {
+      const { data, error } = await db.rpc('execute_journaled_trade', {
         p_student_id: studentId, p_request_id: order.request_id, p_ticker: order.ticker,
         p_action: order.action, p_shares: order.shares, p_price: market.price,
         p_quote_as_of: market.asOf, p_price_source: market.source,
+        p_rationale: order.rationale,
       });
       if (error) {
         if (error.code === 'P0001') return reply(400, { error: error.message });

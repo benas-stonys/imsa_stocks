@@ -184,6 +184,30 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 
 
 .chart-ranges { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.learning-inline { display:flex; align-items:end; gap:12px; flex-wrap:wrap; margin:16px 0; }
+.learning-inline label { flex:1; min-width:140px; }
+.learning-inline button { margin-bottom:16px; }
+.learning-item { border-top:1px solid #dce2ef; padding:20px 0; overflow-wrap:anywhere; }
+.learning-item h3 { margin-bottom:8px; }
+.learning-list { list-style:none; padding:0; }
+.learning-list li { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; border-top:1px solid #dce2ef; padding:16px 0; }
+.unread-alert { background:#fff3bc; padding:16px!important; border-radius:10px; }
+.preserve-lines { white-space:pre-wrap; overflow-wrap:anywhere; }
+textarea { display:block; width:100%; box-sizing:border-box; padding:12px; margin:8px 0 16px; font:inherit; resize:vertical; }
+textarea:focus-visible,summary:focus-visible { outline:3px solid #93c5fd; outline-offset:3px; }
+blockquote { border-left:4px solid var(--primary); padding:12px 18px; margin:16px 0; background:#f1f4fc; }
+.learning-status:empty { display:none; }
+.learning-status { padding:12px; border:1px solid var(--primary); border-radius:8px; background:white; }
+.learning-refresh { margin-bottom:16px; }
+.allocation-row { padding:12px 0; }
+.allocation-row>div { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+.allocation-row progress { width:100%; height:16px; accent-color:var(--primary); }
+.allocation-row span { font-size:13px; }
+.performance-chart { width:100%; height:auto; min-height:160px; }
+.performance-chart text { font:12px system-ui; fill:#5b6680; }
+.table small { display:block; color:var(--muted); }
+#teacher-tools { scroll-margin-top:24px; }
+summary { cursor:pointer; padding:10px 0; font-weight:600; }
 .chart-options { margin:12px 0; }
 .chart-options summary { cursor:pointer; }
 .chart-wrap { overflow:hidden; }

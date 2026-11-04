@@ -14,6 +14,66 @@ let selectedTicker = '';
 let searchGeneration = 0;
 let quoteBusy = false;
 let researchRequest = 0;
+let demoLearning = { watchlist: [], alerts: [], snapshots: [], assignments: [], scenarios: [] };
+
+async function classroomRequest(action, body = {}) {
+  if (demoMode) return demoClassroomRequest(action, body);
+  const { data } = await supabase.auth.getSession();
+  if (!data?.session?.access_token) throw new Error('Please sign in again.');
+  const response = await fetch(`${API_BASE}/classroom`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${data.session.access_token}` },
+    body: JSON.stringify({ ...body, action }), signal: AbortSignal.timeout(30000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Classroom tools could not be loaded.');
+  return result;
+}
+
+function attachClassroomTools(id, mode) {
+  const host = document.getElementById(id);
+  if (!host || !window.LearningUI) return;
+  window.LearningUI.mount(host, mode, {
+    request: classroomRequest, portfolio: () => dashboardState.portfolio,
+    stocks: () => dashboardState.stocks, students: () => dashboardState.leaderboard,
+    async openStock(ticker) {
+      const { stock } = await stockDataRequest('stock-quote?ticker=' + encodeURIComponent(ticker));
+      if (!host.isConnected) return;
+      dashboardState.stocks = [...dashboardState.stocks.filter(s => s.ticker !== ticker), stock];
+      selectedTicker = ticker; activeStudentTab = 'trade'; renderStudentTabs();
+    },
+  });
+}
+
+function demoClassroomRequest(action, body) {
+  const state = demoLearning;
+  const stock = dashboardState.stocks.find(s => s.ticker === body.ticker);
+  if (action === 'load') {
+    for (const alert of state.alerts) {
+      const price = dashboardState.stocks.find(s => s.ticker === alert.ticker)?.current_price;
+      if (!alert.triggered_at && ((alert.direction === 'above' && price >= alert.target) || (alert.direction === 'below' && price <= alert.target))) {
+        alert.triggered_at = new Date().toISOString(); alert.triggered_price = price;
+      }
+    }
+    const now = new Date().toISOString();
+    state.snapshots = [{ day:now.slice(0,10), captured_at:now, cash:dashboardState.portfolio.cash, total_value:calculatePortfolioValue(dashboardState.portfolio,dashboardState.stocks), contains_simulated:true }];
+    return state;
+  }
+  if (action === 'journal.list') return { rows:dashboardState.history.rows.slice((body.page||0)*25,(body.page||0)*25+25) };
+  if (action === 'journal.reflect') {
+    const row = dashboardState.history.rows.find(r=>r.id===body.id); if (row) row.reflection=body.text;
+  } else if (action === 'watch.add') {
+    if (!stock) throw new Error('Choose one of the five demo stocks.');
+    if (!state.watchlist.some(s=>s.ticker===stock.ticker)) state.watchlist.push(stock);
+  } else if (action === 'watch.remove') state.watchlist=state.watchlist.filter(s=>s.ticker!==body.ticker);
+  else if (action === 'alert.add') {
+    if (!stock || !['above','below'].includes(body.direction) || !(Number(body.target)>0)) throw new Error('Choose a demo stock and a valid target.');
+    state.alerts.unshift({id:crypto.randomUUID(),ticker:body.ticker,target:Number(body.target),direction:body.direction,created_at:new Date().toISOString()});
+  } else if (action === 'alert.remove') state.alerts=state.alerts.filter(a=>a.id!==body.id);
+  else if (action === 'alert.ack') { const alert=state.alerts.find(a=>a.id===body.id); if(alert) alert.acknowledged=true; }
+  else if (action === 'assignment.submit') {const assignment=state.assignments.find(a=>a.id===body.id);if(assignment){assignment.response=body.text;assignment.submitted_at=new Date().toISOString();}}
+  else throw new Error('Teacher tools require a signed-in administrator.');
+  return {ok:true};
+}
 
 const resourceLinks = [
   { name: 'Yahoo Finance', url: 'https://finance.yahoo.com' },
@@ -182,6 +242,7 @@ async function renderDashboard(profile, user) {
     document.getElementById('dashboard-body').innerHTML = renderAdminPanel(profile, stocks, leaderboard);
     attachAdminListeners();
     attachAuditLog();
+    attachClassroomTools('teacher-tools', 'admin');
   } else {
     renderStudentTabs();
   }
@@ -225,6 +286,7 @@ function renderStudentTabs() {
       document.getElementById('trade-action').value = pendingOrder.action;
       document.getElementById('trade-ticker').value = pendingOrder.ticker;
       document.getElementById('trade-shares').value = pendingOrder.shares;
+      document.getElementById('trade-rationale').value = pendingOrder.rationale || '';
       setTicketLocked(true);
     }
     form.addEventListener('input', updateTradeEstimate);
@@ -235,14 +297,23 @@ function renderStudentTabs() {
       event.preventDefault();
       await handleTrade();
     });
+    document.getElementById('watch-selected').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await classroomRequest('watch.add', { ticker: document.getElementById('trade-ticker').value }); button.textContent = 'Added to watchlist'; }
+      catch (error) { document.getElementById('watch-notice').textContent = error.message; button.disabled = false; }
+    });
   } else if (activeStudentTab === 'accounts') {
     content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard) + (demoMode ? '' : passwordForm(false));
     if (!demoMode) attachPasswordForm(false);
+    attachClassroomTools('account-tools', 'accounts');
   } else {
     content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section><section id="research-panel"></section>` + renderMarketTable(stocks) + renderResourcesTab();
     attachStockSearch();
     loadResearchPanel(selectedTicker || stocks[0]?.ticker);
     attachTickerClicks();
+    content.insertAdjacentHTML('afterbegin', '<div id="research-tools"></div>');
+    attachClassroomTools('research-tools', 'research');
   }
 }
 
@@ -267,10 +338,13 @@ function renderTradeTab(stocks, portfolio) {
         <input id="trade-ticker" type="hidden" value="${escapeHtml(selectedTicker || stocks[0]?.ticker || '')}" />
         <label for="trade-shares">Number of shares</label>
         <input id="trade-shares" type="number" min="1" max="2147483647" step="1" value="1" required />
+        <label for="trade-rationale">Why this trade? <span class="small-text">Optional</span></label>
+        <textarea id="trade-rationale" maxlength="2000" rows="3" placeholder="My reasoning, expectations, and risks…"></textarea>
         <p class="small-text">Order type: <strong>Market</strong></p>
         <p class="small-text">A new quote is requested when you submit. Your final price may differ from this estimate. Outside market hours, orders use the latest available market quote. Teacher price overrides take precedence.</p>
         <button id="trade-submit" type="submit">Place market order</button>
       </form>
+      <button id="watch-selected" class="secondary" type="button">Add stock to watchlist</button><p id="watch-notice" role="status"></p>
     </section>
     <div class="trade-side">
       <aside class="card order-summary">
@@ -309,6 +383,7 @@ function renderPositionsTab(profile, portfolio, stocks, leaderboard) {
       <p class="small-text">Starting cash: ${formatCurrency(profile.starting_cash)}</p>
       ${renderHoldingsTable(portfolio.holdings, stocks)}
     </div>
+    <div id="account-tools"></div>
     <div class="card">
       <h2>Trade history</h2>
       ${renderTradeHistory(dashboardState.history)}
@@ -362,7 +437,7 @@ function attachAdminListeners() {
 
 function renderAdminPanel(profile, stocks, leaderboard) {
   return `
-    <nav class="tabs admin-nav" aria-label="Administration"><a href="#audit-log">Audit logs</a><a href="#student-form">Add student</a><a href="#price-override-form">Manage stocks</a></nav>
+    <nav class="tabs admin-nav" aria-label="Administration"><a href="#audit-log">Audit logs</a><a href="#student-form">Add student</a><a href="#price-override-form">Manage stocks</a><a href="#teacher-tools">Learning tools</a></nav>
     <section id="audit-log" class="card"><p class="eyebrow">CLASSROOM ACTIVITY</p><h2>Student audit logs</h2><p class="small-text">Completed buys and sells are recorded automatically for every student. New students appear in the filter as soon as their account is created.</p><div class="audit-controls"><label for="audit-student">Student</label><select id="audit-student"><option value="">All students</option></select><button type="button" id="audit-refresh" class="secondary">Refresh</button><button type="button" id="audit-export" class="secondary">Export CSV</button></div><div id="audit-results" aria-live="polite">Loading transactions…</div><div class="audit-pagination"><button id="audit-prev" class="secondary" disabled>Previous</button><span id="audit-page"></span><button id="audit-next" class="secondary" disabled>Next</button></div></section>
     <div class="grid grid-2">
       <div class="card">
@@ -417,6 +492,7 @@ function renderAdminPanel(profile, stocks, leaderboard) {
       <h3>Students and portfolios</h3>
       ${renderStudentList(leaderboard)}
     </div>
+    <div id="teacher-tools"></div>
   `;
 }
 
@@ -530,7 +606,7 @@ function formatPrice(value) {
 }
 
 function setTicketLocked(locked) {
-  ['trade-action', 'trade-ticker', 'trade-shares'].forEach(id => { document.getElementById(id).disabled = locked; });
+  ['trade-action', 'trade-ticker', 'trade-shares', 'trade-rationale'].forEach(id => { document.getElementById(id).disabled = locked; });
   document.querySelectorAll('#stock-search-form input, #stock-search-form button, #stock-search-results button').forEach(el => { el.disabled = locked; });
 }
 
@@ -566,7 +642,7 @@ async function loadResearchPanel(ticker) {
       if (!valid() || current !== request) return;
       chartData = result;
       canvas.hidden = false;
-      target.querySelector('#chart-message').textContent = result.candles.source + ' · ' + result.candles.t.length + ' candles · Regular trading hours · Prices may be delayed';
+      target.querySelector('#chart-message').textContent = result.candles.source + ' · ' + result.candles.t.length + ' candles · ' + (result.candles.simulated ? 'Hourly scenario updates. Only recorded classroom prices are shown; market fundamentals below are unchanged.' : 'Regular trading hours · Prices may be delayed');
       draw();
     } catch (error) {
       if (valid() && current === request) target.querySelector('#chart-message').textContent = error.message;
@@ -589,14 +665,14 @@ async function loadResearchPanel(ticker) {
   const data = await stockDataRequest('stock-research?ticker=' + encodeURIComponent(ticker)).catch(error => ({ error: error.message }));
   if (!valid()) return;
   target.querySelector('#research-title').textContent = ticker + (data.profile?.name ? ' · ' + data.profile.name : '');
-  target.querySelector('#research-status').textContent = data.error ? 'Quote unavailable' : 'Latest quote';
+  target.querySelector('#research-status').textContent = data.error ? 'Quote unavailable' : (data.simulated ? 'Classroom execution price · simulated' : 'Latest quote');
   if (!data.error) renderResearchStats(data);
 }
 
 function renderResearchStats(data) {
   const metric = data.metric || {}; const quote = data.quote || {}; const profile = data.profile || {};
-  const entries = [['Price', formatPrice(quote.c)], ['Change', `${Number(quote.dp || 0).toFixed(2)}%`], ['Open', formatPrice(quote.o)], ['Day high', formatPrice(quote.h)], ['Day low', formatPrice(quote.l)], ['Volume', formatNumber(quote.v || metric['10DayAverageTradingVolume'])], ['52-week high', formatPrice(metric['52WeekHigh'] || metric['52WeekHighPrice'])], ['52-week low', formatPrice(metric['52WeekLow'] || metric['52WeekLowPrice'])], ['EPS (TTM)', formatPrice(metric.epsTTM)], ['P/E (TTM)', formatNumber(metric.peTTM)], ['Market cap', formatLargeNumber(profile.marketCapitalization || metric.marketCapitalization)], ['Exchange', profile.exchange || '—']];
-  document.getElementById('research-stats').innerHTML = entries.map(([label, value]) => `<div class="stat"><span>${label}</span><strong>${value || '—'}</strong></div>`).join('');
+  const entries = [[data.simulated ? 'Classroom price' : 'Price', formatPrice(quote.c)], ['Change', quote.dp == null ? '—' : `${Number(quote.dp).toFixed(2)}%`], ['Open', formatPrice(quote.o)], ['Day high', formatPrice(quote.h)], ['Day low', formatPrice(quote.l)], [quote.v != null ? 'Volume' : '10-day avg volume (M)', formatNumber(quote.v ?? metric['10DayAverageTradingVolume'])], ['52-week high', formatPrice(metric['52WeekHigh'] || metric['52WeekHighPrice'])], ['52-week low', formatPrice(metric['52WeekLow'] || metric['52WeekLowPrice'])], ['EPS (TTM)', formatPrice(metric.epsTTM)], ['P/E (TTM)', formatNumber(metric.peTTM)], ['Market cap', formatLargeNumber(profile.marketCapitalization || metric.marketCapitalization)], ['Exchange', profile.exchange || '—']];
+  document.getElementById('research-stats').innerHTML = entries.map(([label, value]) => `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value || '—')}</strong></div>`).join('');
 }
 
 function drawResearchChart(data, mode) {
@@ -732,6 +808,7 @@ async function handleTrade() {
     action: document.getElementById('trade-action').value,
     ticker: document.getElementById('trade-ticker').value,
     shares: Number(document.getElementById('trade-shares').value),
+    rationale: document.getElementById('trade-rationale').value.trim(),
     request_id: crypto.randomUUID(),
   };
   if (!Number.isSafeInteger(order.shares) || order.shares < 1 || order.shares > 2147483647 || !order.ticker) return;
@@ -836,10 +913,11 @@ async function handleOverridePrice() {
 }
 
 async function handleRefreshPrices() {
-  const response = await fetch(`${API_BASE}/fetch-stocks`, { method: 'GET' });
+  const { data: sessionData } = await supabase.auth.getSession();
+  const response = await fetch(`${API_BASE}/fetch-stocks`, { method: 'POST', headers: { authorization: `Bearer ${sessionData?.session?.access_token || ''}` } });
   const data = await response.json();
   if (response.ok) {
-    alert('Latest prices refreshed.');
+    alert(`Price refresh finished: ${data.updated} checked, ${data.failed} unavailable, ${data.deferred} deferred. Saved prices are retained when a new quote is unavailable.`);
     start();
   } else {
     alert(`Price refresh failed: ${data.error || response.statusText}`);
@@ -1046,6 +1124,7 @@ async function exportAudit(student) {
 }
 
 function startDemo() {
+  demoLearning = { watchlist: [], alerts: [], snapshots: [], assignments: [{id:'demo-assignment',title:'Build your investment thesis',instructions:'Choose a company. Explain what it does, why you would invest, and one risk.',created_at:new Date().toISOString()}],scenarios:[] };
   demoMode = true; tradeBusy = false; quoteBusy = false; pendingOrder = null; tradeNotice = null; selectedTicker = 'AAPL'; activeStudentTab = 'trade';
   const stocks = [['AAPL','Apple',180],['MSFT','Microsoft',420],['NVDA','Nvidia',120],['AMZN','Amazon',190],['TSLA','Tesla',250]].map(([ticker,name,current_price]) => ({ticker,name,current_price,last_updated:new Date().toISOString(),is_overridden:false}));
   dashboardState = { profile: {id:'demo',username:'Demo investor',role:'student',starting_cash:10000}, stocks, portfolio:{cash:10000,holdings:{}},history:{rows:[]},leaderboard:[] };
@@ -1074,7 +1153,7 @@ function handleDemoTrade() {
     account.cash = Math.round((account.cash + (action === 'buy' ? -total : total))*100)/100;
     account.holdings[ticker] = (account.holdings[ticker] || 0) + (action === 'buy' ? shares : -shares);
     if (!account.holdings[ticker]) delete account.holdings[ticker];
-    dashboardState.history.rows.unshift({ticker,action,shares,price:stock.current_price,total_amount:total,timestamp:new Date().toISOString()});
+    dashboardState.history.rows.unshift({id:crypto.randomUUID(),ticker,action,shares,price:stock.current_price,total_amount:total,timestamp:new Date().toISOString(),rationale:document.getElementById('trade-rationale').value.trim()});
     tradeNotice = {text:(action === 'buy' ? 'Bought ' : 'Sold ') + shares + ' ' + ticker + ' for ' + formatCurrency(total) + ' in the demo. This trade is not saved.'};
   }
   renderStudentTabs();

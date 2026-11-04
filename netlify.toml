@@ -9,4 +9,6 @@
 
 [functions."refresh-stock-prices"]
   schedule = "@hourly"
-  
+
+[functions."classroom-tick"]
+  schedule = "10 * * * *"

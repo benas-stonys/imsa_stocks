@@ -142,8 +142,7 @@ async function resetPortfolio({ student_id }) {
     return { statusCode: 404, body: JSON.stringify({ error: 'Student profile not found' }) };
   }
 
-  const cash = Number(profile.starting_cash) || 10000;
-  const { error } = await supabase.from('portfolios').update({ cash, holdings: {}, updated_at: new Date().toISOString() }).eq('student_id', student_id);
+  const { error } = await supabase.rpc('reset_learning_history', { p_student: student_id });
   if (error) {
     return { statusCode: 500, body: JSON.stringify({ error: error.message }) };
   }
