@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { SYMBOL } = require('./lib/stock-catalog');
+const { budgetFetch } = require('./lib/finnhub-budget');
 
 exports.handler = async event => {
   const reply = (statusCode, body) => ({ statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(body) });
@@ -25,7 +26,7 @@ exports.handler = async event => {
     };
     const [quote, metric, profile] = await Promise.all(Object.values(urls).map(async url => {
       if (!key) return {};
-      try { const response = await fetch(url, { signal: AbortSignal.timeout(12000) }); return response.ok ? await response.json() : {}; }
+      try { const response = await budgetFetch(url, { signal: AbortSignal.timeout(12000) }, 'interactive', db); return response.ok ? await response.json() : {}; }
       catch { return {}; }
     }));
     const executionQuote = simulated ? { c:Number(saved.data.current_price) } : quote;

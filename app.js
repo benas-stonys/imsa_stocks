@@ -280,6 +280,7 @@ function renderStudentTabs() {
   const content = document.getElementById('tab-content');
   if (activeStudentTab === 'trade') {
     content.innerHTML = renderTradeTab(stocks, portfolio);
+    attachOrderTools(content, true);
     if (selectedTicker && stocks.some(stock => stock.ticker === selectedTicker)) document.getElementById('trade-ticker').value = selectedTicker;
     const form = document.getElementById('trade-form');
     if (pendingOrder) {
@@ -307,6 +308,7 @@ function renderStudentTabs() {
     content.innerHTML = renderPositionsTab(profile, portfolio, stocks, leaderboard) + (demoMode ? '' : passwordForm(false));
     if (!demoMode) attachPasswordForm(false);
     attachClassroomTools('account-tools', 'accounts');
+    attachOrderTools(content, false);
   } else {
     content.innerHTML = `<section class="card"><h2>Find a stock</h2>${renderStockSearch()}</section><section id="research-panel"></section>` + renderMarketTable(stocks) + renderResourcesTab();
     attachStockSearch();
@@ -317,12 +319,30 @@ function renderStudentTabs() {
   }
 }
 
+function attachOrderTools(content, editor) {
+  if (!window.OrdersUI) return;
+  const host = document.createElement('div');
+  content.appendChild(host);
+  window.OrdersUI.mount(host, {
+    studentId: dashboardState.profile.id, ticker: selectedTicker || dashboardState.stocks[0]?.ticker || '', demo: demoMode,
+    request: async body => {
+      const session = await supabase.auth.getSession();
+      const token = session.data?.session?.access_token;
+      if (!token) throw new Error('Sign in again to manage orders.');
+      const response = await fetch(`${API_BASE}/orders`, {method:'POST', headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:JSON.stringify(body),signal:AbortSignal.timeout(35000)});
+      const result = await response.json();
+      if (!response.ok) { const error = new Error(result.error || 'Orders unavailable.'); error.uncertain = result.uncertain ?? response.status >= 500; throw error; }
+      return result;
+    },
+  }, editor);
+}
+
 function renderTradeTab(stocks, portfolio) {
   return `
     <div class="grid grid-2 trade-layout">
     <section class="card">
       <p class="eyebrow">CLASSROOM TRADING</p>
-      <h2>Trade ticket</h2>
+      <h2>Trade ticket · Quick market trade</h2>
       <p class="small-text">Buy or sell whole shares with your classroom cash.</p>
       <div id="trade-message" role="status" aria-live="polite">${tradeNotice ? `<div class="message ${tradeNotice.error ? 'error' : 'success'}">${escapeHtml(tradeNotice.text)}</div>` : ''}</div>
       ${portfolio.missing ? '<div class="message error">No portfolio found. Contact your teacher.</div>' : ''}
@@ -349,7 +369,7 @@ function renderTradeTab(stocks, portfolio) {
     <div class="trade-side">
       <aside class="card order-summary">
         <h2>Order preview</h2>
-        <p class="small-text">Available cash</p>
+        <p class="small-text">Cash balance (includes cash reserved for open orders)</p>
         <p class="cash-amount">${formatCurrency(portfolio.cash)}</p>
         <div id="trade-estimate" aria-live="polite"></div>
       </aside>

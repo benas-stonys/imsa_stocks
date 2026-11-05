@@ -254,3 +254,13 @@ input,select,textarea { border:1px solid #a8b2c8; border-radius:8px; }
 #audit-log,#student-form,#price-override-form { scroll-margin-top:24px; }
 @media(max-width:900px) { .trade-layout { grid-template-columns:1fr; } .app-shell { padding:24px 18px 100px; } }
 @media(max-width:550px) { .card { padding:18px; } .profile-banner .grid { grid-template-columns:1fr; } .profile-banner .grid>div:last-child { position:absolute; right:0; top:0; } .profile-banner #logout-button { padding:6px 8px; font-size:11px; } .avatar { width:54px; height:54px; font-size:22px; } .profile-banner h1 { font-size:20px; } .profile-identity { gap:12px; padding-top:26px; } .role-badge { margin-left:66px; } .banner-kicker { font-size:9px; } .brand-subtitle { display:none; } .audit-pagination { justify-content:space-between; gap:6px; } .tab-btn,.admin-nav a { min-width:0; flex:1; } }
+/* Advanced stock tickets share the classroom card treatment. */
+.order-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:12px; }
+.order-leg { border:2px solid #202636; border-radius:14px; padding:16px; margin:16px 0; min-width:0; }
+.order-leg legend { font-weight:700; padding:0 8px; }
+.order-trigger { padding:12px; background:#edf2ff; border-radius:10px; }
+.order-record { border-top:1px solid #c8cfdd; padding:16px 0; overflow-wrap:anywhere; }
+.order-record li { margin:8px 0; }
+.orders-balances { font-weight:700; margin:16px 0; }
+.orders-notice { overflow-wrap:anywhere; }
+[hidden] { display:none !important; }

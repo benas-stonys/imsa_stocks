@@ -2,7 +2,7 @@ const SYMBOL = /^[A-Z0-9.^-]{1,20}$/;
 let catalogCache;
 let catalogLoading;
 
-async function loadCatalog({ fetchImpl = fetch, env = process.env } = {}) {
+async function loadCatalog({ fetchImpl = require('./finnhub-budget').budgetFetch, env = process.env } = {}) {
   const key = env.FINNHUB_API_KEY || env.FINNHUB_KEY;
   if (!key) throw new Error('Market data is not configured. Contact your teacher.');
   const response = await fetchImpl(`https://finnhub.io/api/v1/stock/symbol?exchange=US&token=${encodeURIComponent(key)}`, {

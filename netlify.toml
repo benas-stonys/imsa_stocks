@@ -12,3 +12,6 @@
 
 [functions."classroom-tick"]
   schedule = "10 * * * *"
+
+[functions."orders-tick"]
+  schedule = "* 13-21 * * 1-5"

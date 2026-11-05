@@ -13,7 +13,7 @@ function validateOrder(body) {
   return { ticker: body.ticker, action: body.action, shares: body.shares, request_id: body.request_id, rationale: body.rationale || '' };
 }
 
-async function fetchMarketQuote(stock, { fetchImpl = fetch, env = process.env, now = Date.now() } = {}) {
+async function fetchMarketQuote(stock, { fetchImpl = require('./finnhub-budget').budgetFetch, env = process.env, now = Date.now() } = {}) {
   // Teacher overrides remain intentional classroom prices.
   if (stock.is_overridden) {
     if (!Number.isFinite(Number(stock.current_price)) || Number(stock.current_price) <= 0) {
